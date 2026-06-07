@@ -29,7 +29,7 @@ uv tool install openbeats     # or: pipx install openbeats
 Handy for a quick look:
 
 ```bash
-openbeats-infer --checkpoint espnet/OpenBEATS-Large-i1-as20k \
+openbeats-infer --checkpoint espnet/OpenBEATS-Large-i2-as20k \
     --audio audio.wav --out embeddings.npz
 ```
 
@@ -46,7 +46,7 @@ from openbeats.model import OpenBeats
 from openbeats.utils import load_audio
 
 # load model
-model = OpenBeats.from_pretrained("espnet/OpenBEATS-Large-i1-as20k", device="cuda")
+model = OpenBeats.from_pretrained("espnet/OpenBEATS-Large-i2-as20k", device="cuda")
 
 # from a file with any sample rate
 out = model.encode_file("audio.wav")              # pass chunk_seconds=10 for long audio

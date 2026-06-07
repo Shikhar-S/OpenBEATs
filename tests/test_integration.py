@@ -22,7 +22,7 @@ def _tone(seconds=3, sr=16000):
 def test_ssl_encoder_embeddings():
     from openbeats.model import OpenBeats
 
-    model = OpenBeats.from_pretrained("shikhar7ssu/OpenBEATs-Large-i1")
+    model = OpenBeats.from_pretrained("shikhar7ssu/OpenBEATs-Large-i2")
     out = model.encode(*_tone())
     assert out["patch_embeddings"].shape[1] == 1024
     assert "logits" not in out  # SSL encoder has no classifier head
@@ -31,7 +31,7 @@ def test_ssl_encoder_embeddings():
 def test_finetune_classification_logits():
     from openbeats.model import OpenBeats
 
-    model = OpenBeats.from_pretrained("espnet/OpenBEATS-Large-i1-as20k")
+    model = OpenBeats.from_pretrained("espnet/OpenBEATS-Large-i2-as20k")
     out = model.encode(*_tone())
     assert out["patch_embeddings"].shape[1] == 1024
     assert out["probs"].shape == (527,)

@@ -17,7 +17,7 @@ import numpy as np
 
 logger = logging.getLogger("openbeats")
 
-DEFAULT_REPO = "shikhar7ssu/OpenBEATs-Large-i1"
+DEFAULT_REPO = "espnet/OpenBEATS-Large-i2-as20k"
 ALLOW_PATTERNS = ["*config.yaml", "*epoch*.pt", "*.pth", "*.ckpt"]
 TARGET_SR = 16000
 
