@@ -1,8 +1,8 @@
-# OpenBEATs inference
+# OpenBEATs
 
-[OpenBEATs](https://shikhar-s.github.io/OpenBEATs/) is a general-purpose audio
-encoder pre-trained on speech, music, environmental sound, and bioacoustics
-([paper](https://arxiv.org/abs/2507.14129)). This package runs it on audio and
+[OpenBEATs](https://arxiv.org/abs/2507.14129) is a general-purpose audio
+encoder pre-trained on speech, music, environmental sound, and bioacoustics.
+This package runs it on audio and
 returns patch-level embeddings, plus class probabilities when a fine-tuned
 checkpoint is used.
 
