@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+checkpoints/
+*.npz
+dist/
+.pytest_cache/

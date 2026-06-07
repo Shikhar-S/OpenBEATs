@@ -1,0 +1,48 @@
+[project]
+name = "openbeats"
+version = "0.1.0"
+description = "Inference for the OpenBEATs audio encoder (vendored ESPnet BeatsEncoder)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Shikhar Bharadwaj" }]
+keywords = ["audio", "beats", "openbeats", "embeddings", "bioacoustics", "espnet"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Lower bounds only: an existing torch/torchaudio install satisfies these, so pip
+# won't reinstall and clobber a user's (e.g. CUDA-matched) build.
+dependencies = [
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "numpy",
+    "packaging",
+    "pyyaml",
+    "huggingface-hub",
+    "soundfile",
+]
+
+[project.optional-dependencies]
+# Only for checkpoints using the wav2vec2 conformer adapter / learned positional
+# embeddings (not used by the standard OpenBEATs encoders).
+adapter = ["transformers"]
+
+[project.scripts]
+openbeats-infer = "openbeats.cli:infer_main"
+openbeats-download = "openbeats.cli:download_main"
+
+[project.urls]
+Homepage = "https://shikhar-s.github.io/OpenBEATs/"
+Paper = "https://arxiv.org/abs/2507.14129"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openbeats"]
