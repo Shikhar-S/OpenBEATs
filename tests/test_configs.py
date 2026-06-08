@@ -30,7 +30,12 @@ def test_run_configs_present_and_consistent():
         assert cfg["model_conf"]["ignore_id"] == -2
         # the DeepSpeed scheduler horizon should match the loop's max_steps
         ds = _load_json(f"ds_openbeats_{size}.json")
-        assert ds["bf16"]["enabled"] is True
+        # bf16 via torch_autocast (NOT pure bf16): the waveform frontend computes
+        # fbank in fp32 (ta_kaldi can't do bf16), so params stay fp32 and the
+        # forward autocasts -- verified on a GH200. See CLAUDE.md.
+        assert ds["torch_autocast"]["enabled"] is True
+        assert ds["torch_autocast"]["dtype"] == "bfloat16"
+        assert "bf16" not in ds  # pure-bf16 would break the fp32 fbank -> conv
         assert ds["zero_optimization"]["stage"] == 1
         assert (
             ds["scheduler"]["params"]["total_num_steps"]

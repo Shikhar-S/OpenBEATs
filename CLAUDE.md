@@ -104,6 +104,13 @@ optional classifier head → `OpenBeats` inference wrapper**.
   numerical detail `loss/weight*world_size` and an `iterator_stop` all-reduce. A
   `PlainEngine` fallback mirrors DeepSpeed's checkpoint layout (`global_step{N}/
   mp_rank_00_model_states.pt` with a `module` key + `latest`) for CPU/no-DeepSpeed.
+  **bf16 is via DeepSpeed `torch_autocast`, not pure `"bf16"`** (the JSON configs):
+  `waveform_input: true` means the frontend runs `ta_kaldi` in fp32 (it can't do
+  bf16), so params stay fp32 and the forward autocasts — the model's
+  `with autocast(False)` around the fbank then keeps fbank fp32 and the rest bf16.
+  Pure-bf16 would make the `patch_embedding` conv weights bf16 and crash on the
+  fp32 fbank. The configs also set `torch_adam: true` so the optimizer needs no
+  FusedAdam JIT (the cluster's nvcc can lag torch's CUDA). Verified on a GH200.
 - `convert_checkpoint.py` — stage C. Reads `["module"]` (ZeRO-1 keeps full weights),
   keeps `encoder.`-prefixed keys (strip + float32), averages if multiple, attaches
   `beats_config`, writes `{"model","cfg"}` — the same format `OpenBeats.from_pretrained`
