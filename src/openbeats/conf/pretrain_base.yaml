@@ -1,0 +1,45 @@
+# OpenBEATs base encoder pretraining (12 layers / 768-d). Pair with
+# conf/ds_openbeats_base.json. The optimizer / LR schedule / bf16 / grad clip all
+# live in the DeepSpeed JSON; this file is architecture + data + loop cadence.
+
+encoder_conf:
+  # fbank normalization stats (must match the corpus the tokenizer saw).
+  fbank_mean: 15.41663
+  fbank_std: 6.55582
+  beats_config:
+    encoder_layers: 12
+    encoder_embed_dim: 768
+    encoder_ffn_embed_dim: 3072
+    encoder_attention_heads: 12
+    decoder_embed_dim: 768
+    decoder_layers: 3            # layers in the pretraining predictor
+    codebook_vocab_size: 1024    # must equal the token dataset's codebook_size
+    mask_ratio: 0.75
+    dropout: 0.1
+    encoder_layerdrop: 0.0
+    deep_norm: true
+    relative_position_embedding: true
+    num_buckets: 320
+    max_distance: 800
+    gru_rel_pos: true
+    use_flash_attn: false
+
+model_conf:
+  ignore_id: -2                  # target-1 of the -1 pad; do not change
+  label_smoothing: 0.1
+  waveform_input: true           # dataset stores audio paths; fbank recomputed
+  mixup_probability: 0.0         # vendored but disabled in v1
+  contrastive_loss_weight: 0.0   # vendored but disabled in v1
+
+data_conf:
+  batch_bins: 4000000            # ~raw 16 kHz samples per batch; tune to GPU memory
+  bin_by: samples
+  num_workers: 4
+  seed: 0
+
+train_conf:
+  max_steps: 400000              # keep in sync with the DeepSpeed scheduler
+  max_epochs: 1000
+  save_interval: 10000
+  valid_interval: 10000
+  log_interval: 100

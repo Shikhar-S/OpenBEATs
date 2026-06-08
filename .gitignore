@@ -5,3 +5,6 @@ checkpoints/
 *.npz
 dist/
 .pytest_cache/
+
+# local-only design notes (not committed; see request)
+docs/pretraining-design.md

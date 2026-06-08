@@ -1,7 +1,7 @@
 [project]
 name = "openbeats"
-version = "0.1.1"
-description = "Inference for the OpenBEATs audio encoder (vendored ESPnet BeatsEncoder)"
+version = "0.2.0"
+description = "Inference + pretraining for the OpenBEATs audio encoder (vendored ESPnet BeatsEncoder)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -28,17 +28,29 @@ dependencies = [
 # Only for checkpoints using the wav2vec2 conformer adapter / learned positional
 # embeddings (not used by the standard OpenBEATs encoders).
 adapter = ["transformers"]
+# Stage A (tokenize & dump): the acoustic tokenizer (einops) + the Parquet token
+# dataset (pyarrow). Keeps the default inference install light & ESPnet-free.
+tokenize = ["pyarrow", "einops"]
+# Stage B (pretrain): DeepSpeed loop + logging, on top of the tokenize deps.
+# typeguard is needed by the verbatim-vendored BeatsPretrainModel (@typechecked).
+train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard"]
 
 [project.scripts]
 openbeats-infer = "openbeats.cli:infer_main"
 openbeats-download = "openbeats.cli:download_main"
+openbeats-tokenize = "openbeats.tokenize.dump:tokenize_main"
+openbeats-tokens = "openbeats.tokenize.dump:tokens_main"
+openbeats-pretrain = "openbeats.pretrain.train:main"
+openbeats-convert = "openbeats.convert_checkpoint:main"
 
 [project.urls]
 Homepage = "https://shikhar-s.github.io/OpenBEATs/"
 Paper = "https://arxiv.org/abs/2507.14129"
 
 [dependency-groups]
-dev = ["pytest"]
+# Tokenize-stage deps (einops/pyarrow) are in dev so the offline unit tests for
+# the vendored tokenizer/helpers and the Parquet schema run with `uv run pytest`.
+dev = ["pytest", "einops", "pyarrow", "typeguard"]
 
 [build-system]
 requires = ["hatchling"]
