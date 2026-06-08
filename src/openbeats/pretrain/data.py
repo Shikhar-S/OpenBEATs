@@ -135,7 +135,15 @@ class LengthBucketBatchSampler(Sampler):
         if self.shuffle:
             rng = np.random.default_rng(self.seed + self.epoch)
             rng.shuffle(batches)
-        # disjoint slice for this rank
+        # Every rank must run the SAME number of optimizer steps per epoch, or the
+        # per-step gradient all-reduce desyncs and NCCL deadlocks. All ranks build
+        # the identical `batches` list (same seed), so drop the remainder to a
+        # multiple of world_size, then take a disjoint, equal-sized slice. Up to
+        # world_size-1 batches are dropped per epoch (different ones each epoch
+        # because the order is reshuffled in set_epoch).
+        if self.world_size > 1:
+            usable = (len(batches) // self.world_size) * self.world_size
+            batches = batches[:usable]
         batches = batches[self.rank :: self.world_size]
         return batches
 

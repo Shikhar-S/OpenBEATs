@@ -49,18 +49,30 @@ def test_collate_shapes_and_padding():
     assert out["speech_lengths"].tolist() == [100, 60]
 
 
-def test_length_bucket_sampler_covers_all_and_disjoint_ranks():
+def test_length_bucket_sampler_equal_counts_and_disjoint_ranks():
     lengths = list(range(1, 41))  # 40 items
     s0 = LengthBucketBatchSampler(lengths, batch_bins=100, rank=0, world_size=2, seed=0)
     s1 = LengthBucketBatchSampler(lengths, batch_bins=100, rank=1, world_size=2, seed=0)
+    # critical for DeepSpeed: every rank runs the SAME number of batches/steps
+    assert len(s0) == len(s1)
     b0 = [i for batch in s0 for i in batch]
     b1 = [i for batch in s1 for i in batch]
-    assert set(b0).isdisjoint(b1)
-    assert set(b0) | set(b1) == set(range(40))
+    assert set(b0).isdisjoint(b1)  # disjoint partition
+    assert set(b0) | set(b1) <= set(range(40))  # subset (remainder may be dropped)
+    # at most world_size-1 *batches* dropped vs the single-rank batching
+    full = LengthBucketBatchSampler(lengths, batch_bins=100, world_size=1, seed=0)
+    assert 0 <= len(full) - 2 * len(s0) < 2
     # each batch respects the bin budget: max_len * count <= batch_bins
     for batch in s0:
         m = max(lengths[i] for i in batch)
         assert m * len(batch) <= 100 or len(batch) == 1
+
+
+def test_single_rank_sampler_covers_all():
+    lengths = list(range(1, 41))
+    s = LengthBucketBatchSampler(lengths, batch_bins=100, world_size=1, seed=0)
+    seen = [i for batch in s for i in batch]
+    assert set(seen) == set(range(40))  # no truncation when world_size == 1
 
 
 def test_dataset_and_dataloader_roundtrip(tmp_path):
