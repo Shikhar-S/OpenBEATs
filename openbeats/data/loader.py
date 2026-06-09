@@ -62,7 +62,11 @@ class TokenDataset(Dataset):
         self.ends = table["end"].to_pylist() if "end" in cols else [None] * len(self.ids)
         self.n_samples = n_samples
         self.n_codes = n_codes
-        self._codes = table["codes"]  # arrow list column; materialize per-row lazily
+        # Materialize codes to plain numpy arrays. Keeping an arrow column here makes
+        # the dataset slow/deadlock-prone to pickle into spawn DataLoader workers
+        # (especially after a .take() filter); a list of small int arrays pickles
+        # trivially. Codes are tiny (~sum(n_codes) int16, a few MB).
+        self._codes = [np.asarray(c, dtype=np.int64) for c in table["codes"].to_pylist()]
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -74,7 +78,7 @@ class TokenDataset(Dataset):
     def __getitem__(self, i: int) -> dict:
         # read only this segment's span (None/None => whole file); mono float32 @ 16 kHz
         wav, _ = load_audio(self.audios[i], start=self.starts[i], end=self.ends[i])
-        codes = np.asarray(self._codes[i].as_py(), dtype=np.int64)
+        codes = self._codes[i]
         return {
             "id": self.ids[i],
             "speech": torch.from_numpy(np.ascontiguousarray(wav)),
@@ -219,13 +223,15 @@ def build_dataloader(
         batch_sampler=sampler,
         collate_fn=collate,
         num_workers=num_workers,
-        pin_memory=True,
         # Workers run torchaudio resample (torch CPU/OpenMP ops) when audio isn't
         # already 16 kHz. Forking after the parent has initialized CUDA (DeepSpeed)
         # deadlocks on the inherited threadpool state, so spawn fresh worker procs
-        # instead; persistent_workers amortizes the spawn over epochs.
+        # instead; persistent_workers amortizes the spawn over epochs. pin_memory is
+        # off: pinned-memory + spawn is a known startup-hang source and the win is
+        # marginal next to audio I/O.
         **(
-            {"multiprocessing_context": "spawn", "persistent_workers": True}
+            {"multiprocessing_context": "spawn", "persistent_workers": True,
+             "pin_memory": False}
             if num_workers > 0
             else {}
         ),
