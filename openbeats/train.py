@@ -148,14 +148,20 @@ def _step_loss(loss, weight, world_size):
     return (loss / weight * world_size).sum()
 
 
-def _prune_checkpoints(save_dir, keep_last):
-    """Keep only the ``keep_last`` most recent ``global_step{N}`` dirs (rank 0 only).
+def _prune_checkpoints(save_dir, keep_last, keep_milestone_every=0):
+    """Prune ``global_step{N}`` dirs, retaining (rank 0 only):
 
-    Each DeepSpeed checkpoint is large (model + ZeRO optimizer states), so without
-    this a many-epoch run accumulates hundreds of GB. The ``latest`` file points at
-    the highest step, which is always within the kept set.
+    - the ``keep_last`` most recent (for resume / final-N averaging),
+    - every milestone step where ``N % keep_milestone_every == 0`` (kept forever; use
+      a multiple of ``save_interval`` so a checkpoint lands on it),
+    - and always the latest, so resume never loses its target.
+
+    Each DeepSpeed checkpoint is large (model + ZeRO optimizer states); without this a
+    many-epoch run accumulates hundreds of GB. Both knobs off => no pruning (keep all).
     """
-    if not keep_last or keep_last <= 0:
+    keep_last = keep_last or 0
+    keep_milestone_every = keep_milestone_every or 0
+    if keep_last <= 0 and keep_milestone_every <= 0:
         return
     import re
     import shutil
@@ -166,9 +172,17 @@ def _prune_checkpoints(save_dir, keep_last):
         p = os.path.join(save_dir, name)
         if m and os.path.isdir(p):
             dirs.append((int(m.group(1)), p))
+    if not dirs:
+        return
     dirs.sort()
-    for _, p in dirs[:-keep_last]:
-        shutil.rmtree(p, ignore_errors=True)
+    keep = {dirs[-1][1]}  # always retain the latest (resume safety)
+    if keep_last > 0:
+        keep.update(p for _, p in dirs[-keep_last:])
+    if keep_milestone_every > 0:
+        keep.update(p for step, p in dirs if step % keep_milestone_every == 0)
+    for _, p in dirs:
+        if p not in keep:
+            shutil.rmtree(p, ignore_errors=True)
 
 
 def run(
@@ -184,6 +198,7 @@ def run(
     valid_interval=10000,
     log_interval=50,
     keep_last_n=5,
+    keep_milestone_every=0,
     device="cuda",
     resume=True,
 ):
@@ -211,7 +226,7 @@ def run(
         _train_one_epoch(
             engine, train_loader, epoch, world_size, dist, device,
             max_steps, log_interval, save_dir, save_interval, keep_last_n,
-            valid_loader, valid_interval, rank,
+            keep_milestone_every, valid_loader, valid_interval, rank,
         )
         if engine.global_steps >= max_steps:
             logger.info("reached max_steps=%d; stopping.", max_steps)
@@ -220,12 +235,13 @@ def run(
     # final checkpoint (covers the last partial save interval)
     engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
     if rank == 0:
-        _prune_checkpoints(save_dir, keep_last_n)
+        _prune_checkpoints(save_dir, keep_last_n, keep_milestone_every)
 
 
 def _train_one_epoch(
     engine, loader, epoch, world_size, dist, device, max_steps, log_interval,
-    save_dir, save_interval, keep_last_n, valid_loader, valid_interval, rank,
+    save_dir, save_interval, keep_last_n, keep_milestone_every, valid_loader,
+    valid_interval, rank,
 ):
     iterator_stop = torch.zeros(1, device=device) if dist is not None else None
 
@@ -271,7 +287,7 @@ def _train_one_epoch(
         if save_interval and step % save_interval == 0:
             engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
             if rank == 0:
-                _prune_checkpoints(save_dir, keep_last_n)
+                _prune_checkpoints(save_dir, keep_last_n, keep_milestone_every)
         if step >= max_steps:
             break
 
@@ -419,6 +435,7 @@ def _train(engine_module, argv=None):
         valid_interval=train_conf.get("valid_interval", 10_000),
         log_interval=train_conf.get("log_interval", 50),
         keep_last_n=train_conf.get("keep_last_n", 5),
+        keep_milestone_every=train_conf.get("keep_milestone_every", 0),
         device=device,
         resume=True,
     )
