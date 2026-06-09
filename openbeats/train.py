@@ -387,6 +387,13 @@ def _train(engine_module, argv=None):
         resume=True,
     )
 
+    if rank == 0 and torch.cuda.is_available() and str(device).startswith("cuda"):
+        logger.info(
+            "peak CUDA memory: %.1f GB (batch_bins=%s)",
+            torch.cuda.max_memory_allocated(device) / 1e9,
+            config.get("data_conf", {}).get("batch_bins"),
+        )
+
 
 def train_encoder_main(argv=None):
     """``openbeats-train-encoder``: pretrain the BEATs encoder (masked acoustic modeling)."""
