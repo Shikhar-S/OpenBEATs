@@ -6,5 +6,7 @@ checkpoints/
 dist/
 .pytest_cache/
 
-# local-only design notes (not committed; see request)
-docs/pretraining-design.md
+# local-only design notes / plans — never committed or pushed
+docs/
+# corpus-specific one-off glue + data dumps + checkpoints — not committed for now
+recipes/

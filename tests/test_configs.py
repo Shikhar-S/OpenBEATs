@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 import openbeats
-from openbeats.pretrain.train import build_model
+from openbeats.pretraining.engine import build_model
 
 CONF = Path(openbeats.__file__).parent / "conf"
 

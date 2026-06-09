@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from openbeats.tokenize import schema
-from openbeats.tokenize.dump import dump, read_manifest
+from openbeats.data import dataset as schema
+from openbeats.tokenization.dump import dump, read_manifest
 
 SR = 16000
 

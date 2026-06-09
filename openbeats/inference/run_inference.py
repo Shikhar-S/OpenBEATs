@@ -1,4 +1,5 @@
-"""Console entry points: ``openbeats-infer`` and ``openbeats-download``."""
+"""Console entry point ``openbeats-infer``: run OpenBEATs inference on an audio
+file and print (optionally save) patch embeddings + classification probs."""
 
 import argparse
 import logging
@@ -39,16 +40,3 @@ def infer_main(argv=None):
     if args.out:
         np.savez(args.out, **out)
         print(f"saved -> {args.out}")
-
-
-def download_main(argv=None):
-    from .utils import DEFAULT_REPO, download_checkpoint, find_artifacts
-
-    ap = argparse.ArgumentParser(prog="openbeats-download",
-                                 description="Download an OpenBEATs checkpoint from HF.")
-    ap.add_argument("repo_id", nargs="?", default=DEFAULT_REPO)
-    ap.add_argument("--dest", default=None)
-    args = ap.parse_args(argv)
-
-    config, ckpt = find_artifacts(download_checkpoint(args.repo_id, args.dest))
-    print(f"Downloaded {args.repo_id}\n  config:     {config}\n  checkpoint: {ckpt}")

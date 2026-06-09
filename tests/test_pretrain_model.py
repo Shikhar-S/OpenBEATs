@@ -7,8 +7,8 @@ applies its verbatim `target - 1` internally.
 
 import torch
 
-from openbeats.beats_encoder import BeatsEncoder, BeatsPretrainingPredictor
-from openbeats.pretrain.model import BeatsPretrainModel
+from openbeats.nets.encoder import BeatsEncoder, BeatsPretrainingPredictor
+from openbeats.nets.pretrain_model import BeatsPretrainModel
 
 # Small enough to run on CPU; codebook_vocab_size kept tiny for speed.
 TINY = {

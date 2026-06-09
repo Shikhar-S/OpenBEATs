@@ -1,19 +1,3 @@
-# Vendored byte-identical from ESPnet.
-#
-# Provenance:
-#   ESPnet fork: branch `audioverse_copy`, commit 0c3c8cab6d30faa4e2bcf7489d5a552f5b040056
-#   l2norm, ema_inplace, norm_ema_inplace, sample_vectors, kmeans, beats_frontend,
-#   forward_padding_mask_conv, freeze_conv_module
-#       <- espnet2/speechlm/tokenizer/beats_utils.py
-#   force_gatherable
-#       <- espnet2/torch_utils/device_funcs.py
-#
-# The original `beats_utils.py` has no ESPnet imports, so its functions are copied
-# verbatim. `force_gatherable` is copied verbatim from device_funcs.py and needs
-# `numpy`/`warnings` (added to the imports below). The function/class *bodies* are
-# byte-identical to upstream; only this header and the consolidated import block
-# differ.
-
 import logging
 import warnings
 

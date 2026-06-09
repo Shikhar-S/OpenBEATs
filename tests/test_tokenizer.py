@@ -8,7 +8,7 @@ seed-deterministic. The real BeatsTokenizer is covered behind OPENBEATS_INTEGRAT
 import numpy as np
 import torch
 
-from openbeats.tokenizer import BeatsRandomTokenizer, build_tokenizer
+from openbeats.nets.tokenizer import BeatsRandomTokenizer, build_tokenizer
 
 SR = 16000
 

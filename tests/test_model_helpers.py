@@ -1,6 +1,6 @@
 import torch
 
-from openbeats.utils import _derive_base_repo, build_classifier, encoder_state_dict
+from openbeats.utils.checkpoint import _derive_base_repo, build_classifier, encoder_state_dict
 
 
 def test_derive_base_repo():

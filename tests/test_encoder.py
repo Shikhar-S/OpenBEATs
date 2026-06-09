@@ -1,7 +1,7 @@
 import torch
 
-from openbeats.beats_encoder import BeatsEncoder
-from openbeats.model import OpenBeats
+from openbeats.nets.encoder import BeatsEncoder
+from openbeats.inference.model import OpenBeats
 
 TINY = {"encoder_layers": 2, "encoder_embed_dim": 64,
         "encoder_ffn_embed_dim": 128, "encoder_attention_heads": 4}

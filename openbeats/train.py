@@ -1,27 +1,42 @@
-"""A slim DeepSpeed training loop for OpenBEATs encoder pretraining (stage B).
+"""Common training runner for OpenBEATs (encoder pretraining today; the acoustic
+tokenizer later).
 
-DeepSpeed owns the optimizer, LR schedule, bf16, grad clipping, accumulation,
-checkpointing, and (via its Monitor) logging — all from the JSON config. This
-module is just the loop around it: move batch to device, call the model's
-``(loss, stats, weight)`` contract, apply the proven ``loss/weight*world_size``
-rescale (to offset DeepSpeed's gradient averaging), step, periodically validate
-and checkpoint. An ``iterator_stop`` all-reduce keeps ranks with uneven shard
-counts in lockstep.
+Two halves: this module owns everything **objective-agnostic** -- DeepSpeed/Plain
+engine setup, the epoch loop (equal-count batches, ``loss/weight*world_size``
+rescale, ``iterator_stop``, bf16 ``torch_autocast``), checkpoint/resume, logging --
+and drives a pluggable **engine** (``openbeats.pretraining.engine`` /, later,
+``openbeats.tokenization.engine``) that supplies ``build_model`` /
+``build_dataloaders`` and the model's ``forward(**batch) -> (loss, stats, weight)``
+contract.
 
-For machines without DeepSpeed (and CPU smoke tests) a ``PlainEngine`` fallback
-presents the same interface and mirrors DeepSpeed's on-disk checkpoint layout
-(``<dir>/global_step{N}/mp_rank_00_model_states.pt`` with a ``module`` key + a
-``latest`` file), so the loop, resume, and the export step are format-identical.
+Console script ``openbeats-train-encoder`` (``train_encoder_main``). Launch with
+torchrun (single- or multi-node):
+
+    torchrun --standalone --nnodes=1 --nproc_per_node=8 -m openbeats.train \\
+        --config conf/pretrain_large.yaml \\
+        --deepspeed_config conf/ds_openbeats_large.json \\
+        --train_data data/tokens_train --valid_data data/tokens_valid \\
+        --output_dir exp/openbeats_large
+
+Auto-resumes from ``--output_dir`` (DeepSpeed ``latest``). DeepSpeed owns the
+optimizer, LR schedule, bf16, grad clipping, accumulation, checkpointing, and
+logging -- all from the JSON config; this module is just the loop around it. A
+``PlainEngine`` fallback presents the same interface and mirrors DeepSpeed's
+on-disk checkpoint layout (``<dir>/global_step{N}/mp_rank_00_model_states.pt`` with
+a ``module`` key + a ``latest`` file) for CPU smoke tests / DeepSpeed-less machines.
+Heavy imports are deferred so ``--help`` stays fast.
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
 import os
 
 import torch
 
-logger = logging.getLogger("openbeats.pretrain")
+logger = logging.getLogger("openbeats.train")
 
 MODEL_STATES = "mp_rank_00_model_states.pt"
 
@@ -243,3 +258,130 @@ def validate(engine, loader, world_size, dist, device, step, rank):
         logger.info("[valid] step %d | loss %.4f", step, mean_loss)
         engine.monitor.write_events([("valid/loss", mean_loss, step)])
     return mean_loss
+
+
+# ----------------------------------------------------------------- the dispatch
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _train(engine_module, argv=None):
+    """Build model + data via ``engine_module`` and run the common loop."""
+    p = argparse.ArgumentParser(prog="openbeats-train")
+    p.add_argument("--config", required=True, help="run config YAML")
+    p.add_argument("--deepspeed_config", default=None, help="DeepSpeed JSON config")
+    p.add_argument("--train_data", required=True, help="train token dataset dir")
+    p.add_argument("--valid_data", default=None, help="valid token dataset dir")
+    p.add_argument("--output_dir", required=True)
+    p.add_argument(
+        "--no-deepspeed",
+        action="store_true",
+        help="use the plain torch fallback engine (CPU / no DeepSpeed)",
+    )
+    p.add_argument("--device", default=None, help="override device (default: auto)")
+    args = p.parse_args(argv)
+
+    logging.basicConfig(
+        level=os.environ.get("LOGLEVEL", "INFO").upper(),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    import yaml
+
+    with open(args.config) as f:
+        config = yaml.safe_load(f)
+
+    local_rank = _env_int("LOCAL_RANK", 0)
+    rank = _env_int("RANK", 0)
+    world_size = _env_int("WORLD_SIZE", 1)
+
+    use_deepspeed = not args.no_deepspeed
+    if use_deepspeed:
+        try:
+            import deepspeed  # noqa: F401
+        except ImportError:
+            logger.warning("deepspeed not installed; falling back to plain engine.")
+            use_deepspeed = False
+
+    if args.device:
+        device = args.device
+    elif use_deepspeed or os.environ.get("LOCAL_RANK") is not None:
+        device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # ----- distributed init -----
+    if use_deepspeed and world_size > 1:
+        import deepspeed
+
+        deepspeed.init_distributed(dist_backend="nccl")
+
+    # persist the run config next to checkpoints so openbeats-convert finds it
+    if rank == 0:
+        os.makedirs(args.output_dir, exist_ok=True)
+        with open(os.path.join(args.output_dir, "config.yaml"), "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+
+    # ----- model + data (objective-specific, from the engine module) -----
+    # data paths reach build_dataloaders via the config (runtime injection)
+    data_conf = config.setdefault("data_conf", {})
+    data_conf["train_data"] = args.train_data
+    if args.valid_data:
+        data_conf["valid_data"] = args.valid_data
+
+    model = engine_module.build_model(config)
+    train_loader, train_sampler, valid_loader = engine_module.build_dataloaders(
+        config, rank, world_size
+    )
+
+    # ----- engine -----
+    if use_deepspeed:
+        import deepspeed
+
+        with open(args.deepspeed_config) as f:
+            ds_config = json.load(f)
+        engine, _, _, _ = deepspeed.initialize(
+            model=model,
+            model_parameters=model.parameters(),
+            config=ds_config,
+        )
+    else:
+        train_conf = config.get("train_conf", {})
+        engine = PlainEngine(
+            model,
+            lr=train_conf.get("lr", 1e-4),
+            weight_decay=train_conf.get("weight_decay", 0.01),
+            grad_clip=train_conf.get("grad_clip", 1.0),
+            device=device,
+        )
+
+    train_conf = config.get("train_conf", {})
+    run(
+        engine,
+        train_loader,
+        train_sampler,
+        valid_loader=valid_loader,
+        max_steps=train_conf.get("max_steps", 400_000),
+        max_epochs=train_conf.get("max_epochs", 1000),
+        save_dir=args.output_dir,
+        save_interval=train_conf.get("save_interval", 10_000),
+        valid_interval=train_conf.get("valid_interval", 10_000),
+        log_interval=train_conf.get("log_interval", 50),
+        device=device,
+        resume=True,
+    )
+
+
+def train_encoder_main(argv=None):
+    """``openbeats-train-encoder``: pretrain the BEATs encoder (masked acoustic modeling)."""
+    from .pretraining import engine
+
+    _train(engine, argv)
+
+
+if __name__ == "__main__":
+    train_encoder_main()

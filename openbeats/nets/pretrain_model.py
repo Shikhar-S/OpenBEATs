@@ -1,21 +1,3 @@
-# Vendored byte-identical from ESPnet.
-#
-# Provenance:
-#   ESPnet fork: branch `audioverse_copy`, commit 0c3c8cab6d30faa4e2bcf7489d5a552f5b040056
-#   BeatsPretrainModel   <- espnet2/beats/espnet_model.py
-#   MixupAugment         <- espnet2/layers/mixup_augmentation.py
-#
-# Changes vs upstream (the only ones permitted by the byte-identical rule, §4.1):
-#   * imports repointed at this package's vendored copies (..beats_utils,
-#     ..beats_encoder), and `force_gatherable` pulled from beats_utils.
-#   * the base class `AbsESPnetModel` -> `nn.Module` (an ESPnet abstract base that
-#     is itself just an nn.Module with abstract scaffolding).
-#   * `AbsEncoder` (used only as a type annotation) aliased to `nn.Module` so the
-#     vendored signatures stay byte-identical without importing ESPnet.
-# Mixup and the contrastive CLS term are kept verbatim and disabled via config in
-# v1 (mixup_probability=0.0, contrastive_loss_weight=0.0). `collect_feats` is an
-# ESPnet-harness method never called by our trainer; kept verbatim.
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -27,13 +9,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typeguard import typechecked
 
-from ..beats_encoder import make_pad_mask
-from ..beats_utils import beats_frontend, force_gatherable
+from .beats_utils import beats_frontend, force_gatherable
+from .encoder import make_pad_mask
 
 logger = logging.getLogger(__name__)
 
-# ESPnet's AbsEncoder is an abstract nn.Module used here only as a type hint;
-# alias to nn.Module so the vendored annotations need no ESPnet import.
+# AbsEncoder is used only as a type annotation here; alias it to nn.Module.
 AbsEncoder = nn.Module
 
 

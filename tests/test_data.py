@@ -6,14 +6,14 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from openbeats.pretrain.data import (
+from openbeats.data.loader import (
     PAD_CODE,
     LengthBucketBatchSampler,
     TokenDataset,
     build_dataloader,
     collate,
 )
-from openbeats.tokenize.dump import dump
+from openbeats.tokenization.dump import dump
 
 SR = 16000
 
@@ -103,7 +103,7 @@ def test_dataset_and_dataloader_roundtrip(tmp_path):
 def test_data_target_lengths_match_tokenizer_patch_count(tmp_path):
     """The stored target length must equal the tokenizer's code count for the same
     audio (the alignment invariant the offline dump relies on)."""
-    from openbeats.tokenizer import build_tokenizer
+    from openbeats.nets.tokenizer import build_tokenizer
 
     path = _make_dataset(tmp_path, [(0.7, 440), (1.1, 550)], seed=45)
     ds = TokenDataset(path)

@@ -1,5 +1,5 @@
-"""Plumbing for OpenBEATs: Hugging Face downloads, audio loading, and the
-checkpoint loader that normalizes the two on-disk formats into one spec.
+"""The checkpoint loader that normalizes the two on-disk OpenBEATs formats into
+one spec.
 
 Checkpoint formats:
   - SSL encoder (shikhar7ssu/OpenBEATs-*): self-contained {"cfg", "model"}.
@@ -13,58 +13,14 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-import numpy as np
+from .hub import download_checkpoint, find_artifacts
 
 logger = logging.getLogger("openbeats")
-
-DEFAULT_REPO = "espnet/OpenBEATS-Large-i2-as20k"
-ALLOW_PATTERNS = ["*config.yaml", "*epoch*.pt", "*.pth", "*.ckpt"]
-TARGET_SR = 16000
 
 _CLASSIFIER_KEYS = ("classifier.weight", "head.weight", "output_layer.weight",
                     "decoder.linear_out.weight")
 
 
-# --------------------------------------------------------------------- downloads
-def download_checkpoint(repo_id=DEFAULT_REPO, dest=None, patterns=None) -> str:
-    """Download (part of) a repo; return the local snapshot directory."""
-    from huggingface_hub import snapshot_download
-
-    dest = dest or os.path.join("checkpoints", repo_id.split("/")[-1])
-    return snapshot_download(repo_id, allow_patterns=patterns or ALLOW_PATTERNS,
-                             local_dir=dest)
-
-
-def find_artifacts(snapshot_dir):
-    """Return (config_path, checkpoint_path), either may be None."""
-    config = ckpt = None
-    for root, _, files in os.walk(snapshot_dir):
-        for f in files:
-            if f == "config.yaml":
-                config = config or os.path.join(root, f)
-            elif f.endswith((".pt", ".pth", ".ckpt")):
-                ckpt = ckpt or os.path.join(root, f)
-    return config, ckpt
-
-
-def load_audio(path, target_sr: int = TARGET_SR):
-    """Load an audio file as a mono float32 waveform resampled to target_sr."""
-    import soundfile as sf
-
-    wav, sr = sf.read(path, dtype="float32", always_2d=False)
-    if wav.ndim > 1:
-        wav = wav.mean(axis=1)
-    if sr != target_sr:
-        import torch
-        import torchaudio  # already required (kaldi fbank); avoids a librosa dep
-
-        wav = torchaudio.functional.resample(
-            torch.from_numpy(np.ascontiguousarray(wav)), sr, target_sr
-        ).numpy()
-    return np.ascontiguousarray(wav, dtype=np.float32), target_sr
-
-
-# ---------------------------------------------------------------- checkpoint spec
 @dataclass
 class Checkpoint:
     cfg: dict          # beats_config (architecture)

@@ -1,4 +1,4 @@
-"""Offline unit tests for the vendored helpers in openbeats.beats_utils.
+"""Offline unit tests for the vendored helpers in openbeats.nets.beats_utils.
 
 These exercise the numerical helpers the tokenizer/quantizers rely on (no network,
 no checkpoint). Seeded so they're deterministic.
@@ -7,7 +7,7 @@ no checkpoint). Seeded so they're deterministic.
 import numpy as np
 import torch
 
-from openbeats.beats_utils import (
+from openbeats.nets.beats_utils import (
     beats_frontend,
     ema_inplace,
     force_gatherable,

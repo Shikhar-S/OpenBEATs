@@ -14,8 +14,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from ..tokenize import schema
-from ..utils import load_audio
+from . import dataset as schema
+from .audio import load_audio
 
 PAD_CODE = -1  # model does target-1 -> -2 == ignore_id (CrossEntropyLoss ignore_index)
 

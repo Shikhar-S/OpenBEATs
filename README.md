@@ -42,8 +42,8 @@ classifier. Other options: `--device cuda`, `--max-layer N`, and
 ### From Python
 
 ```python
-from openbeats.model import OpenBeats
-from openbeats.utils import load_audio
+from openbeats.inference.model import OpenBeats
+from openbeats.data.audio import load_audio
 
 # load model
 model = OpenBeats.from_pretrained("espnet/OpenBEATS-Large-i2-as20k", device="cuda")
@@ -82,7 +82,7 @@ openbeats-tokenize --tokenizer random --seed 45 \
 openbeats-tokens stats data/tokens_train                # inspect / validate
 
 # B. pretrain the encoder (torchrun; single- or multi-node; auto-resumes)
-torchrun --standalone --nproc_per_node=8 -m openbeats.pretrain.train \
+torchrun --standalone --nproc_per_node=8 -m openbeats.train \
     --config conf/pretrain_large.yaml \
     --deepspeed_config conf/ds_openbeats_large.json \
     --train_data data/tokens_train --valid_data data/tokens_valid \

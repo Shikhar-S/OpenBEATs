@@ -29,16 +29,17 @@ uv publish                               # publish to PyPI
 ```
 
 There is no linter configured. Console entry points (`pyproject.toml
-[project.scripts]`): `openbeats-infer`, `openbeats-download` (inference);
-`openbeats-tokenize`/`openbeats-tokens` (stage A, `tokenize` extra),
-`openbeats-pretrain` (stage B, `train` extra), `openbeats-convert` (stage C).
-Extras: `tokenize = [pyarrow, einops]`, `train = [deepspeed, wandb, typeguard, …]`.
+[project.scripts]`): `openbeats-infer` (inference), `openbeats-download` (utility);
+`openbeats-tokenize` (stage A, `tokenize` extra), `openbeats-tokens` (utility, dataset
+inspect), `openbeats-train-encoder` (stage B, `train` extra), `openbeats-convert`
+(utility, stage C). Extras: `tokenize = [pyarrow, einops]`, `train = [deepspeed,
+wandb, typeguard, …]`.
 
 Stage B launches under torchrun, e.g.:
 ```bash
-torchrun --standalone --nproc_per_node=8 -m openbeats.pretrain.train \
-    --config src/openbeats/conf/pretrain_large.yaml \
-    --deepspeed_config src/openbeats/conf/ds_openbeats_large.json \
+torchrun --standalone --nproc_per_node=8 -m openbeats.train \
+    --config openbeats/conf/pretrain_large.yaml \
+    --deepspeed_config openbeats/conf/ds_openbeats_large.json \
     --train_data data/tokens_train --valid_data data/tokens_valid \
     --output_dir exp/openbeats_large
 # `--no-deepspeed` uses the PlainEngine fallback (CPU / no DeepSpeed; for smoke tests).
@@ -46,10 +47,22 @@ torchrun --standalone --nproc_per_node=8 -m openbeats.pretrain.train \
 
 ## Architecture
 
-The flow is: **checkpoint resolution → normalized `Checkpoint` → `BeatsEncoder` +
-optional classifier head → `OpenBeats` inference wrapper**.
+**Flat package layout** (no `src/`): the package dir `openbeats/` sits at the repo
+root. Subpackages: `nets/` (all `nn.Module` code: `encoder.py`←BEATs encoder,
+`tokenizer.py`, `pretrain_model.py`, `beats_utils.py`), `data/` (shared data layer:
+`audio.py` load+resample, `dataset.py` Parquet token schema, `loader.py` torch
+Dataset/sampler/collate), `utils/` (cross-cutting + utility CLIs: `hub.py` HF
+download, `checkpoint.py` loader, `convert.py` stage C, `tokens.py` inspect),
+`inference/` (`model.py` `OpenBeats`, `run_inference.py` CLI), `pretraining/`
+(`engine.py` encoder-train build), `tokenization/` (`dump.py` stage A). A **common
+`train.py`** at the package root owns the objective-agnostic loop + engine setup +
+`PlainEngine`, driving a pluggable `engine` (`build_model`/`build_dataloaders`).
 
-- `utils.py` — all the plumbing. The key abstraction is `load_checkpoint()`, which
+The inference flow is: **checkpoint resolution → normalized `Checkpoint` →
+`BeatsEncoder` + optional classifier head → `OpenBeats` inference wrapper**.
+
+- `utils/checkpoint.py` + `utils/hub.py` — the plumbing. The key abstraction is
+  `load_checkpoint()` (in `checkpoint.py`), which
   normalizes **two on-disk checkpoint formats** into one `Checkpoint` dataclass
   (`cfg`, `weights`, `labels`, `multi_label`):
   - **Self-contained SSL encoder** (`shikhar7ssu/OpenBEATs-*`): a single dict with
@@ -63,14 +76,15 @@ optional classifier head → `OpenBeats` inference wrapper**.
   - `encoder_state_dict()` strips ESPnet's `encoder.` prefix; `build_classifier()`
     pulls a linear head from the state dict only if its input dim matches the
     encoder output (guards against e.g. an MLM decoder being mistaken for a head).
-- `model.py` — `OpenBeats`. `from_pretrained()` builds the encoder from the
+- `inference/model.py` — `OpenBeats`. `from_pretrained()` builds the encoder from the
   resolved `Checkpoint` (loads with `strict=False`, warns on non-`_pad` missing
   keys). `encode()` takes a **1-D 16 kHz** waveform and refuses other sample rates
-  (resample via `utils.load_audio()` first). `chunk_seconds` windows long audio and
-  concatenates patches to bound memory.
-- `cli.py` — thin argparse wrappers; imports are deferred into the functions to
-  keep `--help` fast.
-- `beats_encoder.py` — **vendored, 2000+ lines, adapted from Microsoft BEATs /
+  (resample via `data.audio.load_audio()` first). `chunk_seconds` windows long audio
+  and concatenates patches to bound memory.
+- CLI entry points (`inference/run_inference.py`, `tokenization/dump.py`,
+  `utils/{hub,convert,tokens}.py`, `train.py`) — thin argparse wrappers; imports are
+  deferred into the functions to keep `--help` fast.
+- `nets/encoder.py` — **vendored, 2000+ lines, adapted from Microsoft BEATs /
   ESPnet. Treat as third-party; do not refactor casually.** It already contains the
   full pretraining stack (`BeatsEncoder(is_pretraining=True)`, `mask_sequence`,
   `BeatsPretrainingPredictor`). SpecAug and the wav2vec2-conformer /
@@ -80,29 +94,33 @@ optional classifier head → `OpenBeats` inference wrapper**.
 
 ### Pretraining pipeline (stages A→C)
 
-- **Vendored modeling code is byte-identical to ESPnet.** `beats_utils.py`
-  (VQ/k-means/`force_gatherable` helpers), `tokenizer.py` (`BeatsTokenizer` +
-  `BeatsRandomTokenizer` + quantizers), and `pretrain/model.py` (`BeatsPretrainModel`
-  + `MixupAugment`) are copied verbatim from the ESPnet source named in each file's
-  provenance header; the only permitted changes are repointed imports and swapping
-  ESPnet base classes for `nn.Module`. **When editing these files, keep them in
-  lockstep with upstream** (diff against the source/commit in the header). Glue code
-  (`tokenize/`, `pretrain/{data,trainer,train}.py`, `convert_checkpoint.py`, configs)
-  is fresh, not vendored.
-- `tokenize/` — stage A. `schema.py` is the Parquet token-dataset format (one row =
-  one utterance: `id, audio, n_samples, n_codes, codes:list<int16>`; dataset config
-  in Parquet key-value metadata + a `dataset.json` mirror). `dump.py` drives
-  corpus→codes→shards. **Codes are stored shifted to `1..K`** (the `<unk>`+1 shift;
-  index 0 reserved) so the verbatim model's `target-1`/`ignore_id=-2` works and the
-  data layer does no arithmetic.
-- `pretrain/data.py` — `TokenDataset` loads the waveform from each row's `audio`
+- **Vendored modeling code is byte-identical to ESPnet.** `nets/beats_utils.py`
+  (VQ/k-means/`force_gatherable` helpers), `nets/tokenizer.py` (`BeatsTokenizer` +
+  `BeatsRandomTokenizer` + quantizers), and `nets/pretrain_model.py`
+  (`BeatsPretrainModel` + `MixupAugment`) are copied verbatim from the user's ESPnet
+  fork (branch `audioverse_copy`, commit `0c3c8ca`); the files carry no provenance
+  header. The only permitted changes are repointed imports and swapping ESPnet base
+  classes for `nn.Module`. **When editing these files, keep their function/class
+  bodies in lockstep with that upstream.** Glue code (`tokenization/dump.py`,
+  `data/{dataset,loader}.py`, `train.py`,
+  `pretraining/engine.py`, `utils/convert.py`, configs) is fresh, not vendored.
+- `tokenization/dump.py` — stage A driver. `data/dataset.py` is the Parquet
+  token-dataset format (one row = one utterance: `id, audio, n_samples, n_codes,
+  codes:list<int16>`; dataset config in Parquet key-value metadata + a `dataset.json`
+  mirror). `dump.py` drives corpus→codes→shards. **Codes are stored shifted to
+  `1..K`** (the `<unk>`+1 shift; index 0 reserved) so the verbatim model's
+  `target-1`/`ignore_id=-2` works and the data layer does no arithmetic.
+- `data/loader.py` — `TokenDataset` loads the waveform from each row's `audio`
   path (fbank recomputed at train time), `collate` pads speech with `0.0` and
   targets with `-1`, and `LengthBucketBatchSampler` buckets by length and shards
-  batches `[rank::world_size]`.
-- `pretrain/trainer.py` — slim loop around a DeepSpeed engine (DeepSpeed owns
-  optimizer/LR/bf16/clip/accum/checkpointing/logging from the JSON). Keeps the one
-  numerical detail `loss/weight*world_size` and an `iterator_stop` all-reduce. A
-  `PlainEngine` fallback mirrors DeepSpeed's checkpoint layout (`global_step{N}/
+  batches `[rank::world_size]` (dropping the remainder to keep per-rank batch counts
+  equal — DeepSpeed deadlocks otherwise).
+- `train.py` + `pretraining/engine.py` — `train.py` is the slim, objective-agnostic
+  loop around a DeepSpeed engine (DeepSpeed owns optimizer/LR/bf16/clip/accum/
+  checkpointing/logging from the JSON); `engine.py` supplies `build_model` +
+  `build_dataloaders`. `train.py` keeps the one numerical detail
+  `loss/weight*world_size` and an `iterator_stop` all-reduce. Its `PlainEngine`
+  fallback mirrors DeepSpeed's checkpoint layout (`global_step{N}/
   mp_rank_00_model_states.pt` with a `module` key + `latest`) for CPU/no-DeepSpeed.
   **bf16 is via DeepSpeed `torch_autocast`, not pure `"bf16"`** (the JSON configs):
   `waveform_input: true` means the frontend runs `ta_kaldi` in fp32 (it can't do
@@ -111,7 +129,7 @@ optional classifier head → `OpenBeats` inference wrapper**.
   Pure-bf16 would make the `patch_embedding` conv weights bf16 and crash on the
   fp32 fbank. The configs also set `torch_adam: true` so the optimizer needs no
   FusedAdam JIT (the cluster's nvcc can lag torch's CUDA). Verified on a GH200.
-- `convert_checkpoint.py` — stage C. Reads `["module"]` (ZeRO-1 keeps full weights),
+- `utils/convert.py` — stage C. Reads `["module"]` (ZeRO-1 keeps full weights),
   keeps `encoder.`-prefixed keys (strip + float32), averages if multiple, attaches
   `beats_config`, writes `{"model","cfg"}` — the same format `OpenBeats.from_pretrained`
   loads. So stage C output flows straight back into the inference path.
@@ -135,5 +153,6 @@ optional classifier head → `OpenBeats` inference wrapper**.
   `tests/test_tokenizer.py` / `tests/test_data.py`. Keep `waveform_input` and fbank
   params single-sourced from dataset metadata.
 - **Next milestone: acoustic tokenizer *training*** (out of scope for v1). The EMA-VQ
-  / k-means code in `tokenizer.py`/`beats_utils.py` is dead at inference but kept
-  verbatim for it.
+  / k-means code in `nets/tokenizer.py`/`nets/beats_utils.py` is dead at inference but
+  kept verbatim for it; it will gain a `tokenization/engine.py` driven by the same
+  common `train.py`.

@@ -8,14 +8,14 @@ import numpy as np
 import soundfile as sf
 import yaml
 
-from openbeats.beats_encoder import BeatsEncoder, BeatsPretrainingPredictor
-from openbeats.convert_checkpoint import convert
-from openbeats.model import OpenBeats
-from openbeats.pretrain import trainer
-from openbeats.pretrain.data import build_dataloader
-from openbeats.pretrain.model import BeatsPretrainModel
-from openbeats.pretrain.trainer import PlainEngine
-from openbeats.tokenize.dump import dump
+from openbeats.nets.encoder import BeatsEncoder, BeatsPretrainingPredictor
+from openbeats.utils.convert import convert
+from openbeats.inference.model import OpenBeats
+from openbeats import train as trainer
+from openbeats.data.loader import build_dataloader
+from openbeats.nets.pretrain_model import BeatsPretrainModel
+from openbeats.train import PlainEngine
+from openbeats.tokenization.dump import dump
 
 SR = 16000
 TINY = {

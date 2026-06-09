@@ -8,12 +8,12 @@ import os
 import numpy as np
 import soundfile as sf
 
-from openbeats.beats_encoder import BeatsEncoder, BeatsPretrainingPredictor
-from openbeats.pretrain import trainer
-from openbeats.pretrain.data import build_dataloader
-from openbeats.pretrain.model import BeatsPretrainModel
-from openbeats.pretrain.trainer import MODEL_STATES, PlainEngine
-from openbeats.tokenize.dump import dump
+from openbeats.nets.encoder import BeatsEncoder, BeatsPretrainingPredictor
+from openbeats import train as trainer
+from openbeats.data.loader import build_dataloader
+from openbeats.nets.pretrain_model import BeatsPretrainModel
+from openbeats.train import MODEL_STATES, PlainEngine
+from openbeats.tokenization.dump import dump
 
 SR = 16000
 TINY = {
@@ -94,6 +94,8 @@ def test_step_loss_rescale_is_scalar():
 
 
 def test_train_module_imports():
-    from openbeats.pretrain import train
+    from openbeats import train
+    from openbeats.pretraining import engine
 
-    assert hasattr(train, "main") and hasattr(train, "build_model")
+    assert hasattr(train, "train_encoder_main") and hasattr(train, "run")
+    assert hasattr(engine, "build_model") and hasattr(engine, "build_dataloaders")

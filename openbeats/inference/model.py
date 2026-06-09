@@ -6,12 +6,11 @@ import logging
 import numpy as np
 import torch
 
-from .beats_encoder import BeatsEncoder
-from .utils import (
-    TARGET_SR,
+from ..data.audio import TARGET_SR, load_audio
+from ..nets.encoder import BeatsEncoder
+from ..utils.checkpoint import (
     build_classifier,
     encoder_state_dict,
-    load_audio,
     load_checkpoint,
 )
 

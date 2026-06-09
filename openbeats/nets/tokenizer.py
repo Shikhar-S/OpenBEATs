@@ -1,20 +1,3 @@
-# Vendored byte-identical from ESPnet.
-#
-# Provenance:
-#   ESPnet fork: branch `audioverse_copy`, commit 0c3c8cab6d30faa4e2bcf7489d5a552f5b040056
-#   BeatsTokenizerConfig, BeatsTokenizer, NormEMAVectorQuantizer, EmbeddingEMA,
-#   BeatsTokenizerPretrainingPredictor, BeatsRandomTokenizer
-#       <- espnet2/speechlm/tokenizer/beats_tokenizer.py
-#   RandomProjectionQuantizer
-#       <- espnet2/speechlm/tokenizer/random_tokenizer.py
-#
-# The classes below are copied verbatim; the ONLY change is repointing the ESPnet
-# imports at this package's local vendored copies (.beats_encoder, .beats_utils)
-# and inlining RandomProjectionQuantizer (so the whole tokenizer lives in one
-# file). The factory helpers at the very bottom (build_tokenizer / _resolve_*) are
-# new glue, NOT bound by the byte-identical rule. EMA/k-means paths are dead at
-# inference but kept verbatim for the tokenizer-training milestone.
-
 # --------------------------------------------------------
 # BEATs: Audio Pre-Training with Acoustic Tokenizers (https://arxiv.org/abs/2212.09058)
 # Github source: https://github.com/microsoft/unilm/tree/master/beats
@@ -52,7 +35,7 @@ else:
         yield
 
 
-from .beats_encoder import (
+from .encoder import (
     BeatsConfig,
     BeatsEncoder,
     TransformerSentenceEncoderLayer,
@@ -594,7 +577,7 @@ def _resolve_tokenizer_ckpt(spec: str) -> str:
     via the same machinery the inference path uses)."""
     if os.path.isfile(spec):
         return spec
-    from .utils import download_checkpoint, find_artifacts
+    from ..utils.hub import download_checkpoint, find_artifacts
 
     snapshot = spec if os.path.isdir(spec) else download_checkpoint(spec)
     _, ckpt = find_artifacts(snapshot)

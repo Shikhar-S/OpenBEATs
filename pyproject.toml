@@ -36,12 +36,12 @@ tokenize = ["pyarrow", "einops"]
 train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard"]
 
 [project.scripts]
-openbeats-infer = "openbeats.cli:infer_main"
-openbeats-download = "openbeats.cli:download_main"
-openbeats-tokenize = "openbeats.tokenize.dump:tokenize_main"
-openbeats-tokens = "openbeats.tokenize.dump:tokens_main"
-openbeats-pretrain = "openbeats.pretrain.train:main"
-openbeats-convert = "openbeats.convert_checkpoint:main"
+openbeats-infer = "openbeats.inference.run_inference:infer_main"
+openbeats-download = "openbeats.utils.hub:download_main"
+openbeats-tokenize = "openbeats.tokenization.dump:tokenize_main"
+openbeats-tokens = "openbeats.utils.tokens:tokens_main"
+openbeats-train-encoder = "openbeats.train:train_encoder_main"
+openbeats-convert = "openbeats.utils.convert:main"
 
 [project.urls]
 Homepage = "https://shikhar-s.github.io/OpenBEATs/"
@@ -57,4 +57,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openbeats"]
+packages = ["openbeats"]
