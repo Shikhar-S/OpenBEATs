@@ -79,6 +79,12 @@ def build_dataloaders(config: dict, rank: int, world_size: int):
     meta = schema.load_meta(train_data)
     _check_dataset_compat(config, meta)
 
+    # clip-length filter (seconds -> 16 kHz samples); drops degenerate/over-long clips
+    sr = (meta.get("frontend") or {}).get("sample_rate", 16000)
+    min_dur, max_dur = data_conf.get("min_duration"), data_conf.get("max_duration")
+    min_samples = int(min_dur * sr) if min_dur else 0
+    max_samples = int(max_dur * sr) if max_dur else None
+
     _, train_loader, train_sampler = build_dataloader(
         train_data,
         batch_bins=data_conf.get("batch_bins", 3_200_000),
@@ -88,6 +94,8 @@ def build_dataloaders(config: dict, rank: int, world_size: int):
         world_size=world_size,
         seed=data_conf.get("seed", 0),
         max_batch_size=data_conf.get("max_batch_size"),
+        min_samples=min_samples,
+        max_samples=max_samples,
     )
     valid_loader = None
     if valid_data:
@@ -99,5 +107,7 @@ def build_dataloaders(config: dict, rank: int, world_size: int):
             rank=rank,
             world_size=world_size,
             shuffle=False,
+            min_samples=min_samples,
+            max_samples=max_samples,
         )
     return train_loader, train_sampler, valid_loader

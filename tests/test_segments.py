@@ -130,6 +130,26 @@ def test_tokendataset_loads_the_segment_span(tmp_path):
         assert int(enc["code_lengths"][0]) == item["target_lengths"]
 
 
+# ------------------------------------------------------- degenerate-clip filter
+def test_tokendataset_filters_zero_code_and_short_clips(tmp_path):
+    """0-code clips (ultra-short -> NaN loss) are always dropped; min/max_samples
+    bound clip length."""
+    meta = schema.build_meta(codebook_size=1024, tokenizer={"type": "beats_random"})
+    w = schema.TokenDatasetWriter(str(tmp_path), meta)
+    w.add("ok", "/x/a.wav", 16000, [1, 2, 3, 4, 5])   # 1.0 s, 5 codes
+    w.add("zero", "/x/z.wav", 100, [])                 # degenerate: 0 codes
+    w.add("short", "/x/s.wav", 2000, [7, 8])           # 0.125 s
+    w.flush()
+    schema.write_dataset_json(str(tmp_path), meta)
+
+    ds = TokenDataset(str(tmp_path))                   # zero-code always dropped
+    assert set(ds.ids) == {"ok", "short"}
+    ds2 = TokenDataset(str(tmp_path), min_samples=4800)  # 0.3 s -> drops "short" too
+    assert set(ds2.ids) == {"ok"}
+    ds3 = TokenDataset(str(tmp_path), max_samples=8000)   # 0.5 s cap -> drops "ok"
+    assert set(ds3.ids) == {"short"}
+
+
 # ---------------------------------------------------------------- fbank guard
 def _cfg(fbank_mean):
     return {"encoder_conf": {"fbank_mean": fbank_mean, "fbank_std": 6.19,

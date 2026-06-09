@@ -10,6 +10,8 @@ padding; for distributed runs each rank takes a disjoint slice of the batches.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
@@ -17,24 +19,49 @@ from torch.utils.data import Dataset, Sampler
 from . import dataset as schema
 from .audio import load_audio
 
+logger = logging.getLogger("openbeats.data")
+
 PAD_CODE = -1  # model does target-1 -> -2 == ignore_id (CrossEntropyLoss ignore_index)
 
 
 class TokenDataset(Dataset):
-    """A Parquet token dataset as a torch Dataset of pretraining items."""
+    """A Parquet token dataset as a torch Dataset of pretraining items.
 
-    def __init__(self, path: str):
+    Degenerate clips are filtered out: any row with ``n_codes == 0`` (ultra-short
+    audio -> 0 patches -> masking nothing -> NaN loss) is always dropped, and
+    ``min_samples``/``max_samples`` (16 kHz sample counts) bound clip length — mirrors
+    ESPnet's ``min/max_wav_duration``.
+    """
+
+    def __init__(self, path: str, *, min_samples: int = 0, max_samples: int | None = None):
         self.path = path
         self.meta = schema.load_meta(path)
         table = schema.read_table(path)
+        n_samples = np.asarray(table["n_samples"].to_pylist(), dtype=np.int64)
+        n_codes = np.asarray(table["n_codes"].to_pylist(), dtype=np.int64)
+
+        keep = (n_codes > 0) & (n_samples >= int(min_samples))
+        if max_samples:
+            keep &= n_samples <= int(max_samples)
+        if not keep.all():
+            import pyarrow as pa
+
+            kept = np.nonzero(keep)[0]
+            logger.info(
+                "TokenDataset: kept %d/%d clips (dropped %d zero-code/out-of-range)",
+                len(kept), len(keep), len(keep) - len(kept),
+            )
+            table = table.take(pa.array(kept))
+            n_samples, n_codes = n_samples[kept], n_codes[kept]
+
+        cols = table.column_names
         self.ids = table["id"].to_pylist()
         self.audios = table["audio"].to_pylist()
-        cols = table.column_names
         # start/end are v2; a v1 dataset without them reads as whole-file (None).
         self.starts = table["start"].to_pylist() if "start" in cols else [None] * len(self.ids)
         self.ends = table["end"].to_pylist() if "end" in cols else [None] * len(self.ids)
-        self.n_samples = np.asarray(table["n_samples"].to_pylist(), dtype=np.int64)
-        self.n_codes = np.asarray(table["n_codes"].to_pylist(), dtype=np.int64)
+        self.n_samples = n_samples
+        self.n_codes = n_codes
         self._codes = table["codes"]  # arrow list column; materialize per-row lazily
 
     def __len__(self) -> int:
@@ -171,9 +198,11 @@ def build_dataloader(
     world_size: int = 1,
     max_batch_size: int | None = None,
     drop_last: bool = False,
+    min_samples: int = 0,
+    max_samples: int | None = None,
 ):
     """Build (dataset, dataloader, sampler) for a token dataset."""
-    dataset = TokenDataset(path)
+    dataset = TokenDataset(path, min_samples=min_samples, max_samples=max_samples)
     lengths = dataset.n_samples if bin_by == "samples" else dataset.n_codes
     sampler = LengthBucketBatchSampler(
         lengths,
