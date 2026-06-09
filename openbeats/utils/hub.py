@@ -1,12 +1,11 @@
 """Hugging Face downloads for OpenBEATs checkpoints, plus the
-``openbeats-download`` console script."""
+openbeats-download console script."""
 
 import argparse
 import os
 
 DEFAULT_REPO = "espnet/OpenBEATS-Large-i2-as20k"
 ALLOW_PATTERNS = ["*config.yaml", "*epoch*.pt", "*.pth", "*.ckpt"]
-
 
 def download_checkpoint(repo_id=DEFAULT_REPO, dest=None, patterns=None) -> str:
     """Download (part of) a repo; return the local snapshot directory."""
@@ -15,7 +14,6 @@ def download_checkpoint(repo_id=DEFAULT_REPO, dest=None, patterns=None) -> str:
     dest = dest or os.path.join("checkpoints", repo_id.split("/")[-1])
     return snapshot_download(repo_id, allow_patterns=patterns or ALLOW_PATTERNS,
                              local_dir=dest)
-
 
 def find_artifacts(snapshot_dir):
     """Return (config_path, checkpoint_path), either may be None."""
@@ -27,7 +25,6 @@ def find_artifacts(snapshot_dir):
             elif f.endswith((".pt", ".pth", ".ckpt")):
                 ckpt = ckpt or os.path.join(root, f)
     return config, ckpt
-
 
 def download_main(argv=None):
     ap = argparse.ArgumentParser(prog="openbeats-download",

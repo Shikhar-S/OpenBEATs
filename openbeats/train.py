@@ -1,15 +1,15 @@
 """Common training runner for OpenBEATs (encoder pretraining today; the acoustic
 tokenizer later).
 
-Two halves: this module owns everything **objective-agnostic** -- DeepSpeed/Plain
-engine setup, the epoch loop (equal-count batches, ``loss/weight*world_size``
-rescale, ``iterator_stop``, bf16 ``torch_autocast``), checkpoint/resume, logging --
-and drives a pluggable **engine** (``openbeats.pretraining.engine`` /, later,
-``openbeats.tokenization.engine``) that supplies ``build_model`` /
-``build_dataloaders`` and the model's ``forward(**batch) -> (loss, stats, weight)``
+Two halves: this module owns everything objective-agnostic -- DeepSpeed/Plain
+engine setup, the epoch loop (equal-count batches, loss/weight*world_size
+rescale, iterator_stop, bf16 torch_autocast), checkpoint/resume, logging --
+and drives a pluggable engine (openbeats.pretraining.engine /, later,
+openbeats.tokenization.engine) that supplies build_model /
+build_dataloaders and the model's forward(**batch) -> (loss, stats, weight)
 contract.
 
-Console script ``openbeats-train-encoder`` (``train_encoder_main``). Launch with
+Console script openbeats-train-encoder (train_encoder_main). Launch with
 torchrun (single- or multi-node):
 
     torchrun --standalone --nnodes=1 --nproc_per_node=8 -m openbeats.train \\
@@ -18,13 +18,13 @@ torchrun (single- or multi-node):
         --train_data data/tokens_train --valid_data data/tokens_valid \\
         --output_dir exp/openbeats_large
 
-Auto-resumes from ``--output_dir`` (DeepSpeed ``latest``). DeepSpeed owns the
+Auto-resumes from --output_dir (DeepSpeed latest). DeepSpeed owns the
 optimizer, LR schedule, bf16, grad clipping, accumulation, checkpointing, and
 logging -- all from the JSON config; this module is just the loop around it. A
-``PlainEngine`` fallback presents the same interface and mirrors DeepSpeed's
-on-disk checkpoint layout (``<dir>/global_step{N}/mp_rank_00_model_states.pt`` with
-a ``module`` key + a ``latest`` file) for CPU smoke tests / DeepSpeed-less machines.
-Heavy imports are deferred so ``--help`` stays fast.
+PlainEngine fallback presents the same interface and mirrors DeepSpeed's
+on-disk checkpoint layout (<dir>/global_step{N}/mp_rank_00_model_states.pt with
+a module key + a latest file) for CPU smoke tests / DeepSpeed-less machines.
+Heavy imports are deferred so --help stays fast.
 """
 
 from __future__ import annotations
@@ -40,20 +40,15 @@ logger = logging.getLogger("openbeats.train")
 
 MODEL_STATES = "mp_rank_00_model_states.pt"
 
-
-# ----------------------------------------------------------------- device helper
 def to_device(batch: dict, device: str) -> dict:
     out = {}
     for k, v in batch.items():
         out[k] = v.to(device, non_blocking=True) if torch.is_tensor(v) else v
     return out
 
-
-# ----------------------------------------------------- plain (no-DeepSpeed) engine
 class _NoopMonitor:
     def write_events(self, events):  # events: list[(name, value, step)]
         pass
-
 
 class PlainEngine:
     """Minimal stand-in for a DeepSpeed engine (single process, no sharding).
@@ -126,8 +121,6 @@ class PlainEngine:
         self.global_steps = obj.get("global_steps", 0)
         return path, obj.get("client_state", {})
 
-
-# --------------------------------------------------------------------- the loop
 def _maybe_dist():
     """Return (rank, world_size, dist_module_or_None)."""
     try:
@@ -139,21 +132,19 @@ def _maybe_dist():
         pass
     return 0, 1, None
 
-
 def _step_loss(loss, weight, world_size):
     """The proven rescale: undo DeepSpeed's grad averaging, weight by batch.
 
-    `loss`/`weight` are shape-[1] (force_gatherable); sum collapses to a 0-dim
+    loss/weight are shape-[1] (force_gatherable); sum collapses to a 0-dim
     scalar with the same value so engine.backward gets a scalar."""
     return (loss / weight * world_size).sum()
 
-
 def _prune_checkpoints(save_dir, keep_last, keep_milestone_every=0):
-    """Prune ``global_step{N}`` dirs, retaining (rank 0 only):
+    """Prune global_step{N} dirs, retaining (rank 0 only):
 
-    - the ``keep_last`` most recent (for resume / final-N averaging),
-    - every milestone step where ``N % keep_milestone_every == 0`` (kept forever; use
-      a multiple of ``save_interval`` so a checkpoint lands on it),
+    - the keep_last most recent (for resume / final-N averaging),
+    - every milestone step where N % keep_milestone_every == 0 (kept forever; use
+      a multiple of save_interval so a checkpoint lands on it),
     - and always the latest, so resume never loses its target.
 
     Each DeepSpeed checkpoint is large (model + ZeRO optimizer states); without this a
@@ -184,7 +175,6 @@ def _prune_checkpoints(save_dir, keep_last, keep_milestone_every=0):
         if p not in keep:
             shutil.rmtree(p, ignore_errors=True)
 
-
 def run(
     engine,
     train_loader,
@@ -202,11 +192,11 @@ def run(
     device="cuda",
     resume=True,
 ):
-    """Drive training to ``max_steps``/``max_epochs`` with periodic valid + ckpt.
+    """Drive training to max_steps/max_epochs with periodic valid + ckpt.
 
-    Checkpoints are written every ``save_interval`` steps (plus a final one), not per
+    Checkpoints are written every save_interval steps (plus a final one), not per
     epoch — with tiny epochs (small corpus, large batch) per-epoch saving floods disk.
-    ``keep_last_n`` bounds retained checkpoints.
+    keep_last_n bounds retained checkpoints.
     """
     rank, world_size, dist = _maybe_dist()
     os.makedirs(save_dir, exist_ok=True)
@@ -236,7 +226,6 @@ def run(
     engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
     if rank == 0:
         _prune_checkpoints(save_dir, keep_last_n, keep_milestone_every)
-
 
 def _train_one_epoch(
     engine, loader, epoch, world_size, dist, device, max_steps, log_interval,
@@ -291,7 +280,6 @@ def _train_one_epoch(
         if step >= max_steps:
             break
 
-
 @torch.no_grad()
 def validate(engine, loader, world_size, dist, device, step, rank):
     engine.eval()
@@ -315,17 +303,14 @@ def validate(engine, loader, world_size, dist, device, step, rank):
         engine.monitor.write_events([("valid/loss", mean_loss, step)])
     return mean_loss
 
-
-# ----------------------------------------------------------------- the dispatch
 def _env_int(name, default):
     try:
         return int(os.environ.get(name, default))
     except (TypeError, ValueError):
         return default
 
-
 def _train(engine_module, argv=None):
-    """Build model + data via ``engine_module`` and run the common loop."""
+    """Build model + data via engine_module and run the common loop."""
     p = argparse.ArgumentParser(prog="openbeats-train")
     p.add_argument("--config", required=True, help="run config YAML")
     p.add_argument("--deepspeed_config", default=None, help="DeepSpeed JSON config")
@@ -370,7 +355,6 @@ def _train(engine_module, argv=None):
     else:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # ----- distributed init -----
     if use_deepspeed and world_size > 1:
         import deepspeed
 
@@ -382,7 +366,6 @@ def _train(engine_module, argv=None):
         with open(os.path.join(args.output_dir, "config.yaml"), "w") as f:
             yaml.safe_dump(config, f, sort_keys=False)
 
-    # ----- model + data (objective-specific, from the engine module) -----
     # data paths reach build_dataloaders via the config (runtime injection)
     data_conf = config.setdefault("data_conf", {})
     data_conf["train_data"] = args.train_data
@@ -394,7 +377,6 @@ def _train(engine_module, argv=None):
         config, rank, world_size
     )
 
-    # ----- engine -----
     if use_deepspeed:
         import deepspeed
 
@@ -447,13 +429,11 @@ def _train(engine_module, argv=None):
             config.get("data_conf", {}).get("batch_bins"),
         )
 
-
 def train_encoder_main(argv=None):
-    """``openbeats-train-encoder``: pretrain the BEATs encoder (masked acoustic modeling)."""
+    """openbeats-train-encoder: pretrain the BEATs encoder (masked acoustic modeling)."""
     from .pretraining import engine
 
     _train(engine, argv)
-
 
 if __name__ == "__main__":
     train_encoder_main()

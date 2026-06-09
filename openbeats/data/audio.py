@@ -6,12 +6,11 @@ import numpy as np
 
 TARGET_SR = 16000
 
-
 def load_audio(path, target_sr: int = TARGET_SR, *, start=None, end=None):
-    """Load ``path`` as a mono float32 waveform resampled to ``target_sr``.
+    """Load path as a mono float32 waveform resampled to target_sr.
 
-    ``start``/``end`` (seconds, optional) select a span: only that slice is read at
-    the file's native rate via a seek, then resampled. Both ``None`` => whole file.
+    start/end (seconds, optional) select a span: only that slice is read at
+    the file's native rate via a seek, then resampled. Both None => whole file.
     """
     import soundfile as sf
 

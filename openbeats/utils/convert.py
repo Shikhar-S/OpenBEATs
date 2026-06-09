@@ -1,14 +1,14 @@
 """Stage C: export a lightweight inference checkpoint from a training checkpoint.
 
-Console script ``openbeats-convert``. Reads a DeepSpeed (or PlainEngine) training
-checkpoint -- the full model lives under ``["module"]`` (ZeRO-1 keeps it whole, so
-no fp32 consolidation is needed) -- keeps the ``encoder.``-prefixed weights (strip
-prefix, cast float32), attaches the run's ``beats_config``, and saves the
-``{"model", "cfg"}`` file that ``OpenBeats.from_pretrained`` loads. Multiple
+Console script openbeats-convert. Reads a DeepSpeed (or PlainEngine) training
+checkpoint -- the full model lives under ["module"] (ZeRO-1 keeps it whole, so
+no fp32 consolidation is needed) -- keeps the encoder.-prefixed weights (strip
+prefix, cast float32), attaches the run's beats_config, and saves the
+{"model", "cfg"} file that OpenBeats.from_pretrained loads. Multiple
 checkpoints are averaged.
 
     openbeats-convert \\
-        --train_ckpt exp/openbeats_large \\        # dir (resolves `latest`) or a
+        --train_ckpt exp/openbeats_large \\        # dir (resolves latest) or a
                                                     # .../global_stepN/mp_rank_00_model_states.pt
         --config exp/openbeats_large/config.yaml \\ # default: <rundir>/config.yaml
         --out openbeats_large_pretrained.pt
@@ -24,12 +24,11 @@ logger = logging.getLogger("openbeats.convert")
 
 MODEL_STATES = "mp_rank_00_model_states.pt"
 
-
 def resolve_ckpt(path: str) -> str:
     """Resolve a training-checkpoint path to a concrete model-states file.
 
-    Accepts the states file itself, a ``global_step{N}`` directory, or a run
-    directory containing a DeepSpeed ``latest`` file.
+    Accepts the states file itself, a global_step{N} directory, or a run
+    directory containing a DeepSpeed latest file.
     """
     if os.path.isfile(path):
         return path
@@ -45,7 +44,6 @@ def resolve_ckpt(path: str) -> str:
                 return cand
     raise FileNotFoundError(f"No training checkpoint resolved from '{path}'.")
 
-
 def extract_encoder_state_dict(obj: dict, key_prefix: str = "encoder.") -> dict:
     """Encoder weights from a training checkpoint, stripped + float32."""
     import torch
@@ -56,7 +54,6 @@ def extract_encoder_state_dict(obj: dict, key_prefix: str = "encoder.") -> dict:
         for k, v in sd.items()
         if k.startswith(key_prefix)
     }
-
 
 def average_state_dicts(paths: list, key_prefix: str = "encoder.") -> dict:
     import torch
@@ -78,7 +75,6 @@ def average_state_dicts(paths: list, key_prefix: str = "encoder.") -> dict:
         avg[k] /= len(paths)
     return avg
 
-
 def load_beats_config(config_path: str) -> dict:
     import yaml
 
@@ -91,7 +87,6 @@ def load_beats_config(config_path: str) -> dict:
         )
     return cfg
 
-
 def convert(train_ckpts: list, config_path: str, out_path: str) -> str:
     import torch
 
@@ -101,7 +96,6 @@ def convert(train_ckpts: list, config_path: str, out_path: str) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     torch.save({"model": state_dict, "cfg": cfg}, out_path)
     return out_path
-
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="openbeats-convert")
@@ -131,7 +125,6 @@ def main(argv=None):
         rundir = first if os.path.isdir(first) else os.path.dirname(os.path.dirname(first))
         config_path = os.path.join(rundir, "config.yaml")
     convert(args.train_ckpt, config_path, args.out)
-
 
 if __name__ == "__main__":
     main()

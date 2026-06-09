@@ -20,14 +20,12 @@ logger = logging.getLogger("openbeats")
 _CLASSIFIER_KEYS = ("classifier.weight", "head.weight", "output_layer.weight",
                     "decoder.linear_out.weight")
 
-
 @dataclass
 class Checkpoint:
     cfg: dict          # beats_config (architecture)
     weights: dict      # full model state_dict
     labels: Optional[list] = None       # class names, if a classifier is present
     multi_label: bool = False           # sigmoid vs softmax for the head
-
 
 def encoder_state_dict(weights: dict) -> dict:
     """BeatsEncoder weights; ESPnet models nest them under 'encoder.' -> strip it."""
@@ -36,7 +34,6 @@ def encoder_state_dict(weights: dict) -> dict:
     if "encoder.patch_embedding.weight" in weights:
         return {k[8:]: v for k, v in weights.items() if k.startswith("encoder.")}
     return weights
-
 
 def build_classifier(weights: dict, in_features: int):
     """Linear head from the state_dict if present (input dim must match encoder)."""
@@ -53,7 +50,6 @@ def build_classifier(weights: dict, in_features: int):
         return head
     return None
 
-
 def _derive_base_repo(name: str) -> Optional[str]:
     """Map a fine-tune name/path to its base SSL repo on HF, or None."""
     m = re.search(r"openbeats?-(base|large)-i([123])", name, re.I)
@@ -63,7 +59,6 @@ def _derive_base_repo(name: str) -> Optional[str]:
     if m:
         return f"shikhar7ssu/OpenBEATs-{m.group(1).capitalize()}-i{int(m.group(2)) + 1}"
     return None
-
 
 def _base_beats_config(base_repo: str) -> dict:
     """Fetch a base SSL repo's beats_config (config.yaml is ~13 KB)."""
@@ -78,7 +73,6 @@ def _base_beats_config(base_repo: str) -> dict:
 
     _, ckpt = find_artifacts(download_checkpoint(base_repo))
     return torch.load(ckpt, map_location="cpu", weights_only=False)["cfg"]
-
 
 def load_checkpoint(checkpoint: str, base: Optional[str] = None) -> Checkpoint:
     """Resolve and load any OpenBEATs checkpoint into a normalized Checkpoint."""
@@ -106,7 +100,6 @@ def load_checkpoint(checkpoint: str, base: Optional[str] = None) -> Checkpoint:
     logger.info("Base architecture from %s", base_repo)
     multi_label = (y.get("model_conf") or {}).get("classification_type") == "multi-label"
     return Checkpoint(_base_beats_config(base_repo), obj, y.get("token_list"), multi_label)
-
 
 def _resolve(checkpoint: str):
     """(config_path, checkpoint_path) from a file, dir, or HF repo id."""

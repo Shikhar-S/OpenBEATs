@@ -1,10 +1,9 @@
-"""Console script ``openbeats-tokens``: inspect / stats / validate a token dataset."""
+"""Console script openbeats-tokens: inspect / stats / validate a token dataset."""
 
 from __future__ import annotations
 
 import argparse
 import json
-
 
 def tokens_main(argv=None):
     p = argparse.ArgumentParser(
@@ -49,7 +48,6 @@ def tokens_main(argv=None):
         st = schema.validate(args.dataset, check_audio_exists=args.check_audio)
         print("OK", json.dumps(st))
     return 0
-
 
 def _coverage(path):
     """Number of distinct code values used (codebook coverage)."""

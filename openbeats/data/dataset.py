@@ -1,6 +1,6 @@
 """The OpenBEATs token-dataset format: a directory of self-describing Parquet shards.
 
-A dataset is ``<dir>/shard-*.parquet`` (plus a ``manifest.jsonl`` + ``dataset.json``
+A dataset is <dir>/shard-*.parquet (plus a manifest.jsonl + dataset.json
 mirror). Each row is one utterance (or a segment of a longer recording):
 
     id         : string        utterance id
@@ -10,14 +10,14 @@ mirror). Each row is one utterance (or a segment of a longer recording):
     n_samples  : int64         span length at 16 kHz (for length-bucketing)
     n_codes    : int32         number of patch codes (== patch count)
     codes      : list<int16>   the code sequence, values 1..K (the dump applies the
-                               <unk>+1 shift; index 0 reserved -> see design §3.1)
+                               <unk>+1 shift; index 0 reserved)
 
 Dataset-level config (codebook size, frontend incl. fbank stats, tokenizer, code
 offset) is stored in every shard's Parquet key-value metadata, so each shard is
-self-describing; a top-level ``dataset.json`` mirrors it for eyeballing. This module
+self-describing; a top-level dataset.json mirrors it for eyeballing. This module
 has no torch dependency on purpose (pure pyarrow/numpy) so it stays light.
 
-``start``/``end`` (v2) are nullable; a v1 dataset without them reads as whole-file.
+start/end (v2) are nullable; a v1 dataset without them reads as whole-file.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import pyarrow.parquet as pq
 
 FORMAT = "openbeats-tokens/v2"
 META_KEY = b"openbeats_meta"
-CODES_OFFSET = 1  # stored codes are 1..K; 0 reserved for <unk> (design §3.1)
+CODES_OFFSET = 1  # stored codes are 1..K; 0 reserved for <unk>
 
 DEFAULT_FRONTEND = {
     "sample_rate": 16000,
@@ -46,7 +46,6 @@ DEFAULT_FRONTEND = {
 
 _ARROW_CODE_DTYPE = {"int16": pa.int16(), "int32": pa.int32()}
 _NUMPY_CODE_DTYPE = {"int16": np.int16, "int32": np.int32}
-
 
 def arrow_schema(meta: dict, code_dtype: str = "int16") -> pa.Schema:
     schema = pa.schema(
@@ -61,7 +60,6 @@ def arrow_schema(meta: dict, code_dtype: str = "int16") -> pa.Schema:
         ]
     )
     return schema.with_metadata({META_KEY: json.dumps(meta).encode("utf-8")})
-
 
 def build_meta(
     codebook_size: int,
@@ -91,13 +89,12 @@ def build_meta(
         "code_dtype": code_dtype,
     }
 
-
 @dataclass
 class TokenDatasetWriter:
-    """Buffer rows and flush them to one ``shard-{shard_id:05d}.parquet``.
+    """Buffer rows and flush them to one shard-{shard_id:05d}.parquet.
 
     The writer is "dumb": it stores whatever code values it is handed. The dump
-    driver applies the ``codes_offset`` (+1) shift before calling :meth:`add`, so
+    driver applies the codes_offset (+1) shift before calling :meth:add, so
     on-disk values are 1..K.
     """
 
@@ -155,20 +152,16 @@ class TokenDatasetWriter:
         self._n_samples, self._codes = [], []
         return path
 
-
 def write_dataset_json(out_dir: str, meta: dict) -> str:
     path = os.path.join(out_dir, "dataset.json")
     with open(path, "w") as f:
         json.dump(meta, f, indent=2)
     return path
 
-
-# ------------------------------------------------------------------------ reading
 def shard_paths(path: str) -> list:
     if os.path.isfile(path):
         return [path]
     return sorted(glob.glob(os.path.join(path, "shard-*.parquet")))
-
 
 def load_meta(path: str) -> dict:
     """Dataset metadata, from a shard's Parquet kv-metadata (fallback dataset.json)."""
@@ -183,7 +176,6 @@ def load_meta(path: str) -> dict:
             return json.load(f)
     raise FileNotFoundError(f"No dataset metadata found under '{path}'.")
 
-
 def read_table(path: str, columns: Optional[list] = None) -> pa.Table:
     """Read all shards (optionally projecting columns) into one Arrow table."""
     shards = shard_paths(path)
@@ -191,14 +183,12 @@ def read_table(path: str, columns: Optional[list] = None) -> pa.Table:
         raise FileNotFoundError(f"No shards (shard-*.parquet) found under '{path}'.")
     return pa.concat_tables([pq.read_table(p, columns=columns) for p in shards])
 
-
 def iter_rows(path: str) -> Iterator[dict]:
     table = read_table(path)
     for batch in table.to_batches():
         d = batch.to_pydict()
         for i in range(batch.num_rows):
             yield {k: d[k][i] for k in d}
-
 
 def validate(path: str, check_audio_exists: bool = False) -> dict:
     """Sanity-check a dataset; returns a small stats dict, raises on a hard error."""

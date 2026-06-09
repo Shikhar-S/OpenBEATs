@@ -16,7 +16,6 @@ from ..utils.checkpoint import (
 
 logger = logging.getLogger("openbeats")
 
-
 class OpenBeats:
     """Inference wrapper around the vendored BeatsEncoder."""
 
@@ -31,7 +30,7 @@ class OpenBeats:
     def from_pretrained(cls, checkpoint, device="cpu", max_layer=None, base=None):
         """Build from a HF repo id, a local dir, or a checkpoint file.
 
-        `base`: explicit base SSL repo id, if a fine-tune's architecture source
+        base: explicit base SSL repo id, if a fine-tune's architecture source
         can't be auto-derived.
         """
         ckpt = load_checkpoint(checkpoint, base)

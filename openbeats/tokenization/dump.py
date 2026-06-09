@@ -1,14 +1,14 @@
 """Stage A driver: corpus -> discrete codes -> Parquet shards.
 
-Console script ``openbeats-tokenize`` (``tokenize_main``) -- dump codes for a
-manifest of audio segments. (Dataset inspection lives in ``openbeats.utils.tokens``.)
+Console script openbeats-tokenize (tokenize_main) -- dump codes for a
+manifest of audio segments. (Dataset inspection lives in openbeats.utils.tokens.)
 
-The manifest may carry ``start``/``end`` per entry; only that span is read (at the
+The manifest may carry start/end per entry; only that span is read (at the
 file's native rate) and tokenized, so long recordings need no pre-cutting. fbank
-normalization stats come from the run config (``encoder_conf.fbank_mean/std``) and
+normalization stats come from the run config (encoder_conf.fbank_mean/std) and
 are recorded in the dataset metadata so training can assert they match.
 
-Heavy imports (torch, the tokenizer) are deferred into the functions so ``--help``
+Heavy imports (torch, the tokenizer) are deferred into the functions so --help
 stays fast.
 """
 
@@ -28,13 +28,10 @@ _RANDOM = (None, "random", "beats_random")
 DEFAULT_FBANK_MEAN = 15.41663
 DEFAULT_FBANK_STD = 6.55582
 
-
 def _batched(seq, n):
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
 
-
-# ------------------------------------------------------------------------- dump
 def dump(
     tokenizer_spec,
     manifest,
@@ -134,8 +131,6 @@ def dump(
         shutil.copyfile(manifest, os.path.join(out_dir, "manifest.jsonl"))
     return path
 
-
-# -------------------------------------------------------------------- CLI: dump
 def _resolve_fbank(config_path, cli_mean, cli_std):
     """fbank stats: explicit CLI flag > run config's encoder_conf > package default."""
     mean, std = DEFAULT_FBANK_MEAN, DEFAULT_FBANK_STD
@@ -151,7 +146,6 @@ def _resolve_fbank(config_path, cli_mean, cli_std):
     if cli_std is not None:
         std = cli_std
     return float(mean), float(std)
-
 
 def tokenize_main(argv=None):
     p = argparse.ArgumentParser(
@@ -204,7 +198,6 @@ def tokenize_main(argv=None):
         fbank_std=fbank_std,
         finalize=not args.no_finalize,
     )
-
 
 if __name__ == "__main__":
     tokenize_main()

@@ -1,12 +1,12 @@
 """Encoder-pretraining engine: the objective-specific half of training.
 
-Implements the engine contract that the common ``openbeats.train`` runner drives:
+Implements the engine contract that the common openbeats.train runner drives:
 
     build_model(config) -> nn.Module                          # from nets/
     build_dataloaders(config, rank, world_size) -> (train, sampler, valid)
 
-The model's ``forward(**batch) -> (loss, stats, weight)`` is the shared contract.
-Data paths live in ``config["data_conf"]`` (``train_data`` / ``valid_data``),
+The model's forward(**batch) -> (loss, stats, weight) is the shared contract.
+Data paths live in config["data_conf"] (train_data / valid_data),
 injected by the runner from its CLI args.
 """
 
@@ -16,9 +16,8 @@ import logging
 
 logger = logging.getLogger("openbeats.pretrain")
 
-
 def build_model(config: dict):
-    """Construct BeatsPretrainModel from a run config's ``encoder_conf``/``model_conf``."""
+    """Construct BeatsPretrainModel from a run config's encoder_conf/model_conf."""
     from ..nets.encoder import BeatsEncoder, BeatsPretrainingPredictor
     from ..nets.pretrain_model import BeatsPretrainModel
 
@@ -34,7 +33,6 @@ def build_model(config: dict):
     decoder = BeatsPretrainingPredictor(beats_config)
     model = BeatsPretrainModel(encoder, decoder, **config.get("model_conf", {}))
     return model
-
 
 def _check_dataset_compat(config: dict, meta: dict):
     """Fail fast if the run config disagrees with the dataset it will train on."""
@@ -62,12 +60,11 @@ def _check_dataset_compat(config: dict, meta: dict):
             "dataset is waveform_input but model_conf.waveform_input is false."
         )
 
-
 def build_dataloaders(config: dict, rank: int, world_size: int):
     """Build (train_loader, train_sampler, valid_loader) for encoder pretraining.
 
-    Reads a token dataset (audio + codes) from ``config["data_conf"]["train_data"]``
-    (and optional ``valid_data``); guards the run config against the dataset metadata.
+    Reads a token dataset (audio + codes) from config["data_conf"]["train_data"]
+    (and optional valid_data); guards the run config against the dataset metadata.
     """
     from ..data import dataset as schema
     from ..data.loader import build_dataloader

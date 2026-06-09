@@ -1,9 +1,8 @@
-"""Console entry point ``openbeats-infer``: run OpenBEATs inference on an audio
+"""Console entry point openbeats-infer: run OpenBEATs inference on an audio
 file and print (optionally save) patch embeddings + classification probs."""
 
 import argparse
 import logging
-
 
 def infer_main(argv=None):
     import numpy as np

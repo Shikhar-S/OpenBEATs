@@ -1,10 +1,10 @@
 """Stage B data layer: read a Parquet token dataset and batch it for pretraining.
 
 The dataset stores codes already shifted to 1..K (the dump applied the <unk>+1
-shift, design §3.1), so this layer does **no** arithmetic on codes: it loads the
-waveform from the row's ``audio`` path, returns the code sequence as-is, and the
-collate pads codes with ``-1`` (the verbatim model maps ``target-1 -> -2 ==
-ignore_id``). A length-bucket batch sampler groups similar-length clips to bound
+shift), so this layer does no arithmetic on codes: it loads the
+waveform from the row's audio path, returns the code sequence as-is, and the
+collate pads codes with -1 (the verbatim model maps target-1 -> -2 ==
+ignore_id). A length-bucket batch sampler groups similar-length clips to bound
 padding; for distributed runs each rank takes a disjoint slice of the batches.
 """
 
@@ -23,14 +23,13 @@ logger = logging.getLogger("openbeats.data")
 
 PAD_CODE = -1  # model does target-1 -> -2 == ignore_id (CrossEntropyLoss ignore_index)
 
-
 class TokenDataset(Dataset):
     """A Parquet token dataset as a torch Dataset of pretraining items.
 
-    Degenerate clips are filtered out: any row with ``n_codes == 0`` (ultra-short
+    Degenerate clips are filtered out: any row with n_codes == 0 (ultra-short
     audio -> 0 patches -> masking nothing -> NaN loss) is always dropped, and
-    ``min_samples``/``max_samples`` (16 kHz sample counts) bound clip length — mirrors
-    ESPnet's ``min/max_wav_duration``.
+    min_samples/max_samples (16 kHz sample counts) bound clip length — mirrors
+    ESPnet's min/max_wav_duration.
     """
 
     def __init__(self, path: str, *, min_samples: int = 0, max_samples: int | None = None):
@@ -76,7 +75,6 @@ class TokenDataset(Dataset):
         return int(self.meta["codebook_size"])
 
     def __getitem__(self, i: int) -> dict:
-        # read only this segment's span (None/None => whole file); mono float32 @ 16 kHz
         wav, _ = load_audio(self.audios[i], start=self.starts[i], end=self.ends[i])
         codes = self._codes[i]
         return {
@@ -86,7 +84,6 @@ class TokenDataset(Dataset):
             "target": torch.from_numpy(codes),
             "target_lengths": int(codes.shape[0]),
         }
-
 
 def collate(batch: list) -> dict:
     """Pad speech with 0.0 and targets with PAD_CODE (-1); return model kwargs."""
@@ -113,14 +110,13 @@ def collate(batch: list) -> dict:
         "target_lengths": target_lengths,
     }
 
-
 class LengthBucketBatchSampler(Sampler):
-    """Yield batches of indices grouped by length to ~``batch_bins`` per batch.
+    """Yield batches of indices grouped by length to ~batch_bins per batch.
 
-    ``batch_bins`` is a budget on the summed length of a batch (``bin_by`` selects
+    batch_bins is a budget on the summed length of a batch (bin_by selects
     samples or codes). Clips are sorted by length, packed greedily into batches,
     the batch order is shuffled (seed+epoch), and for distributed training each
-    rank takes ``batches[rank::world_size]``. ``set_epoch`` reshuffles.
+    rank takes batches[rank::world_size]. set_epoch reshuffles.
     """
 
     def __init__(
@@ -173,7 +169,7 @@ class LengthBucketBatchSampler(Sampler):
             rng.shuffle(batches)
         # Every rank must run the SAME number of optimizer steps per epoch, or the
         # per-step gradient all-reduce desyncs and NCCL deadlocks. All ranks build
-        # the identical `batches` list (same seed), so drop the remainder to a
+        # the identical batches list (same seed), so drop the remainder to a
         # multiple of world_size, then take a disjoint, equal-sized slice. Up to
         # world_size-1 batches are dropped per epoch (different ones each epoch
         # because the order is reshuffled in set_epoch).
@@ -188,7 +184,6 @@ class LengthBucketBatchSampler(Sampler):
 
     def __len__(self) -> int:
         return len(self._batches)
-
 
 def build_dataloader(
     path: str,
