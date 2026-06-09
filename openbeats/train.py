@@ -227,6 +227,11 @@ def _train_one_epoch(
                 "epoch %d step %d | loss %.4f | acc_mask %.3f | lr %.2e",
                 epoch, step, float(stats["loss"]), float(stats.get("acc_mask", 0)), lr,
             )
+            engine.monitor.write_events([
+                ("train/loss", float(stats["loss"]), step),
+                ("train/acc_mask", float(stats.get("acc_mask", 0)), step),
+                ("train/lr", lr, step),
+            ])
         if valid_loader is not None and valid_interval and step % valid_interval == 0:
             validate(engine, valid_loader, world_size, dist, device, step, rank)
             engine.train()
@@ -344,6 +349,13 @@ def _train(engine_module, argv=None):
 
         with open(args.deepspeed_config) as f:
             ds_config = json.load(f)
+        # per-run TensorBoard: descriptive logdir/name single-sourced from output_dir
+        # (a logdir/name in the JSON wins; this just fills the default).
+        run_name = os.path.basename(os.path.normpath(args.output_dir))
+        tb = ds_config.setdefault("tensorboard", {})
+        tb.setdefault("enabled", True)
+        tb.setdefault("output_path", os.path.join(args.output_dir, "tb"))
+        tb.setdefault("job_name", run_name)
         engine, _, _, _ = deepspeed.initialize(
             model=model,
             model_parameters=model.parameters(),

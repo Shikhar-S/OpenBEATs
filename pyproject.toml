@@ -33,7 +33,7 @@ adapter = ["transformers"]
 tokenize = ["pyarrow", "einops"]
 # Stage B (pretrain): DeepSpeed loop + logging, on top of the tokenize deps.
 # typeguard is needed by the verbatim-vendored BeatsPretrainModel (@typechecked).
-train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard"]
+train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard", "tensorboard"]
 
 [project.scripts]
 openbeats-infer = "openbeats.inference.run_inference:infer_main"
