@@ -191,5 +191,14 @@ def build_dataloader(
         collate_fn=collate,
         num_workers=num_workers,
         pin_memory=True,
+        # Workers run torchaudio resample (torch CPU/OpenMP ops) when audio isn't
+        # already 16 kHz. Forking after the parent has initialized CUDA (DeepSpeed)
+        # deadlocks on the inherited threadpool state, so spawn fresh worker procs
+        # instead; persistent_workers amortizes the spawn over epochs.
+        **(
+            {"multiprocessing_context": "spawn", "persistent_workers": True}
+            if num_workers > 0
+            else {}
+        ),
     )
     return dataset, loader, sampler
