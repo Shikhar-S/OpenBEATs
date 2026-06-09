@@ -148,6 +148,29 @@ def _step_loss(loss, weight, world_size):
     return (loss / weight * world_size).sum()
 
 
+def _prune_checkpoints(save_dir, keep_last):
+    """Keep only the ``keep_last`` most recent ``global_step{N}`` dirs (rank 0 only).
+
+    Each DeepSpeed checkpoint is large (model + ZeRO optimizer states), so without
+    this a many-epoch run accumulates hundreds of GB. The ``latest`` file points at
+    the highest step, which is always within the kept set.
+    """
+    if not keep_last or keep_last <= 0:
+        return
+    import re
+    import shutil
+
+    dirs = []
+    for name in os.listdir(save_dir):
+        m = re.fullmatch(r"global_step(\d+)", name)
+        p = os.path.join(save_dir, name)
+        if m and os.path.isdir(p):
+            dirs.append((int(m.group(1)), p))
+    dirs.sort()
+    for _, p in dirs[:-keep_last]:
+        shutil.rmtree(p, ignore_errors=True)
+
+
 def run(
     engine,
     train_loader,
@@ -160,10 +183,16 @@ def run(
     save_interval=10000,
     valid_interval=10000,
     log_interval=50,
+    keep_last_n=5,
     device="cuda",
     resume=True,
 ):
-    """Drive training to ``max_steps``/``max_epochs`` with periodic valid + ckpt."""
+    """Drive training to ``max_steps``/``max_epochs`` with periodic valid + ckpt.
+
+    Checkpoints are written every ``save_interval`` steps (plus a final one), not per
+    epoch — with tiny epochs (small corpus, large batch) per-epoch saving floods disk.
+    ``keep_last_n`` bounds retained checkpoints.
+    """
     rank, world_size, dist = _maybe_dist()
     os.makedirs(save_dir, exist_ok=True)
 
@@ -174,25 +203,29 @@ def run(
             start_epoch = client.get("epoch", 0)
             logger.info("resumed at step %d, epoch %d", engine.global_steps, start_epoch)
 
+    epoch = start_epoch
     for epoch in range(start_epoch, max_epochs):
         if train_sampler is not None and hasattr(train_sampler, "set_epoch"):
             train_sampler.set_epoch(epoch)
         engine.train()
         _train_one_epoch(
             engine, train_loader, epoch, world_size, dist, device,
-            max_steps, log_interval, save_dir, save_interval, valid_loader,
-            valid_interval, rank,
+            max_steps, log_interval, save_dir, save_interval, keep_last_n,
+            valid_loader, valid_interval, rank,
         )
-        # epoch-boundary checkpoint (collective)
-        engine.save_checkpoint(save_dir, client_state={"epoch": epoch + 1})
         if engine.global_steps >= max_steps:
             logger.info("reached max_steps=%d; stopping.", max_steps)
             break
 
+    # final checkpoint (covers the last partial save interval)
+    engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
+    if rank == 0:
+        _prune_checkpoints(save_dir, keep_last_n)
+
 
 def _train_one_epoch(
     engine, loader, epoch, world_size, dist, device, max_steps, log_interval,
-    save_dir, save_interval, valid_loader, valid_interval, rank,
+    save_dir, save_interval, keep_last_n, valid_loader, valid_interval, rank,
 ):
     iterator_stop = torch.zeros(1, device=device) if dist is not None else None
 
@@ -237,6 +270,8 @@ def _train_one_epoch(
             engine.train()
         if save_interval and step % save_interval == 0:
             engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
+            if rank == 0:
+                _prune_checkpoints(save_dir, keep_last_n)
         if step >= max_steps:
             break
 
@@ -383,6 +418,7 @@ def _train(engine_module, argv=None):
         save_interval=train_conf.get("save_interval", 10_000),
         valid_interval=train_conf.get("valid_interval", 10_000),
         log_interval=train_conf.get("log_interval", 50),
+        keep_last_n=train_conf.get("keep_last_n", 5),
         device=device,
         resume=True,
     )
