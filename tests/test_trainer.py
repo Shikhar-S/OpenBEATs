@@ -99,3 +99,26 @@ def test_train_module_imports():
 
     assert hasattr(train, "train_encoder_main") and hasattr(train, "run")
     assert hasattr(engine, "build_model") and hasattr(engine, "build_dataloaders")
+
+
+def test_prune_checkpoints_keeps_last_n(tmp_path):
+    import os
+
+    from openbeats.train import _prune_checkpoints
+
+    for n in (38, 76, 2000, 2014, 2128):
+        os.makedirs(tmp_path / f"global_step{n}")
+        (tmp_path / f"global_step{n}" / "states.pt").write_text("x")
+    (tmp_path / "latest").write_text("global_step2128")
+
+    _prune_checkpoints(str(tmp_path), keep_last=3)
+    kept = sorted(
+        int(d.name[len("global_step"):])
+        for d in tmp_path.iterdir()
+        if d.name.startswith("global_step")
+    )
+    assert kept == [2000, 2014, 2128]   # 3 highest by step number, not lexical
+    assert (tmp_path / "latest").exists()  # latest file left intact
+
+    _prune_checkpoints(str(tmp_path), keep_last=0)   # disabled -> no-op
+    assert len([d for d in tmp_path.iterdir() if d.name.startswith("global_step")]) == 3
