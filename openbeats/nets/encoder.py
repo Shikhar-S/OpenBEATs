@@ -24,6 +24,8 @@ import torchaudio.compliance.kaldi as ta_kaldi
 from packaging.version import parse as V
 from torch.nn import LayerNorm, Parameter
 
+from .beats_utils import beats_frontend
+
 try:
     from transformers.models.bart.modeling_bart import BartLearnedPositionalEmbedding
     from transformers.models.wav2vec2_conformer.modeling_wav2vec2_conformer import (
@@ -39,36 +41,8 @@ except ImportError as e:
 SpecAug = None  # SpecAug is only used for training (specaug_config); unused at inference
 
 
-# ---------------------------------------------------------------------------
-# Inlined helpers, copied verbatim from ESPnet so this file is self-contained:
-#   * beats_frontend / forward_padding_mask_conv / freeze_conv_module
-#       <- espnet2/speechlm/tokenizer/beats_utils.py
-#   * make_pad_mask (+ helpers) / roll_tensor
-#       <- espnet/nets/pytorch_backend/nets_utils.py
-# ---------------------------------------------------------------------------
-@torch.no_grad()
-def beats_frontend(
-    source: torch.Tensor,
-    fbank_mean: float,
-    fbank_std: float,
-) -> torch.Tensor:
-    """Preprocess raw audio."""
-    fbanks = []
-    for waveform in source:
-        waveform = waveform.unsqueeze(0) * 2**15  # float32 to int16
-        fbank = ta_kaldi.fbank(
-            waveform,
-            num_mel_bins=128,
-            sample_frequency=16000,
-            frame_length=25,
-            frame_shift=10,
-        )
-        fbanks.append(fbank)
-    fbank = torch.stack(fbanks, dim=0)
-    fbank = (fbank - fbank_mean) / (2 * fbank_std)
-    return fbank
-
-
+# Local helpers: forward_padding_mask_conv / freeze_conv_module / make_pad_mask
+# (+ helpers) / roll_tensor. beats_frontend is imported from .beats_utils (one source).
 @torch.no_grad()
 def forward_padding_mask_conv(
     padding_mask: torch.Tensor,
