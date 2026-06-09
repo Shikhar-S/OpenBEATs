@@ -29,6 +29,10 @@ class TokenDataset(Dataset):
         table = schema.read_table(path)
         self.ids = table["id"].to_pylist()
         self.audios = table["audio"].to_pylist()
+        cols = table.column_names
+        # start/end are v2; a v1 dataset without them reads as whole-file (None).
+        self.starts = table["start"].to_pylist() if "start" in cols else [None] * len(self.ids)
+        self.ends = table["end"].to_pylist() if "end" in cols else [None] * len(self.ids)
         self.n_samples = np.asarray(table["n_samples"].to_pylist(), dtype=np.int64)
         self.n_codes = np.asarray(table["n_codes"].to_pylist(), dtype=np.int64)
         self._codes = table["codes"]  # arrow list column; materialize per-row lazily
@@ -41,7 +45,8 @@ class TokenDataset(Dataset):
         return int(self.meta["codebook_size"])
 
     def __getitem__(self, i: int) -> dict:
-        wav, _ = load_audio(self.audios[i])  # mono float32 @ 16 kHz
+        # read only this segment's span (None/None => whole file); mono float32 @ 16 kHz
+        wav, _ = load_audio(self.audios[i], start=self.starts[i], end=self.ends[i])
         codes = np.asarray(self._codes[i].as_py(), dtype=np.int64)
         return {
             "id": self.ids[i],

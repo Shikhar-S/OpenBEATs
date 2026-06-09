@@ -55,7 +55,7 @@ def test_dump_random_tokenizer_roundtrip(tmp_path):
     dump("random", manifest, str(out), seed=45, batch_size=2)
 
     meta = schema.load_meta(str(out))
-    assert meta["format"] == "openbeats-tokens/v1"
+    assert meta["format"] == "openbeats-tokens/v2"
     assert meta["codes_offset"] == 1
     K = meta["codebook_size"]
 

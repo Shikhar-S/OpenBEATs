@@ -38,12 +38,23 @@ def build_model(config: dict):
 
 def _check_dataset_compat(config: dict, meta: dict):
     """Fail fast if the run config disagrees with the dataset it will train on."""
-    K = config["encoder_conf"]["beats_config"].get("codebook_vocab_size", 1024)
+    encoder_conf = config["encoder_conf"]
+    K = encoder_conf["beats_config"].get("codebook_vocab_size", 1024)
     if int(K) != int(meta["codebook_size"]):
         raise ValueError(
             f"codebook mismatch: config codebook_vocab_size={K} but dataset "
             f"codebook_size={meta['codebook_size']}."
         )
+    # fbank stats must match the tokenizer that produced the codes, or the encoder
+    # normalizes its input differently than the targets assume.
+    frontend = meta.get("frontend") or {}
+    for key in ("fbank_mean", "fbank_std"):
+        if key in frontend and encoder_conf.get(key) is not None:
+            if abs(float(encoder_conf[key]) - float(frontend[key])) > 1e-5:
+                raise ValueError(
+                    f"{key} mismatch: config {encoder_conf[key]} but dataset "
+                    f"{frontend[key]} (the tokenizer used the dataset's stats)."
+                )
     if not config.get("model_conf", {}).get("waveform_input", False) and meta.get(
         "waveform_input", True
     ):

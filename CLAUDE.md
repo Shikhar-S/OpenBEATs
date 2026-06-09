@@ -50,8 +50,9 @@ torchrun --standalone --nproc_per_node=8 -m openbeats.train \
 **Flat package layout** (no `src/`): the package dir `openbeats/` sits at the repo
 root. Subpackages: `nets/` (all `nn.Module` code: `encoder.py`←BEATs encoder,
 `tokenizer.py`, `pretrain_model.py`, `beats_utils.py`), `data/` (shared data layer:
-`audio.py` load+resample, `dataset.py` Parquet token schema, `loader.py` torch
-Dataset/sampler/collate), `utils/` (cross-cutting + utility CLIs: `hub.py` HF
+`manifest.py` JSONL segment manifest, `audio.py` segment-aware load+resample,
+`dataset.py` Parquet token schema, `loader.py` torch Dataset/sampler/collate),
+`utils/` (cross-cutting + utility CLIs: `hub.py` HF
 download, `checkpoint.py` loader, `convert.py` stage C, `tokens.py` inspect),
 `inference/` (`model.py` `OpenBeats`, `run_inference.py` CLI), `pretraining/`
 (`engine.py` encoder-train build), `tokenization/` (`dump.py` stage A). A **common
@@ -104,14 +105,23 @@ The inference flow is: **checkpoint resolution → normalized `Checkpoint` →
   bodies in lockstep with that upstream.** Glue code (`tokenization/dump.py`,
   `data/{dataset,loader}.py`, `train.py`,
   `pretraining/engine.py`, `utils/convert.py`, configs) is fresh, not vendored.
+- `data/manifest.py` — the corpus-agnostic input contract: JSONL of audio segments
+  `{id, audio, start?, end?}` (omit span ⇒ whole file). `read_manifest`/`write_manifest`/
+  `normalize_entry`. Corpus adapters (e.g. `recipes/watkins/prepare_manifest.py`,
+  Kaldi `wav.scp`+`segments`) emit this; tokenize and the loader both consume it.
 - `tokenization/dump.py` — stage A driver. `data/dataset.py` is the Parquet
-  token-dataset format (one row = one utterance: `id, audio, n_samples, n_codes,
-  codes:list<int16>`; dataset config in Parquet key-value metadata + a `dataset.json`
-  mirror). `dump.py` drives corpus→codes→shards. **Codes are stored shifted to
-  `1..K`** (the `<unk>`+1 shift; index 0 reserved) so the verbatim model's
-  `target-1`/`ignore_id=-2` works and the data layer does no arithmetic.
-- `data/loader.py` — `TokenDataset` loads the waveform from each row's `audio`
-  path (fbank recomputed at train time), `collate` pads speech with `0.0` and
+  token-dataset format v2 (one row = one segment: `id, audio, start?, end?, n_samples,
+  n_codes, codes:list<int16>`; dataset config incl. **fbank stats** in Parquet
+  key-value metadata + `dataset.json` + a `manifest.jsonl` mirror, so the dir is
+  self-contained). `dump.py` reads only each segment's span (native-rate seek →
+  resample), takes fbank stats from `--config` (`encoder_conf.fbank_mean/std`), and
+  records them in the metadata. **Codes are stored shifted to `1..K`** (the `<unk>`+1
+  shift; index 0 reserved) so the verbatim model's `target-1`/`ignore_id=-2` works and
+  the data layer does no arithmetic. (`start`/`end` are nullable; a v1 dataset without
+  them reads as whole-file.)
+- `data/loader.py` — `TokenDataset` loads each row's **span** (`start`/`end` → the
+  segment, else the whole file) from its `audio` path (fbank recomputed at train
+  time), `collate` pads speech with `0.0` and
   targets with `-1`, and `LengthBucketBatchSampler` buckets by length and shards
   batches `[rank::world_size]` (dropping the remainder to keep per-rank batch counts
   equal — DeepSpeed deadlocks otherwise).
@@ -150,8 +160,15 @@ The inference flow is: **checkpoint resolution → normalized `Checkpoint` →
   dump→pretrain→convert→infer on a few synthetic clips via the `PlainEngine`.
 - Patch-count alignment (tokenizer codes ↔ encoder patches) is structural — both
   share the BEATs fbank+patch frontend — and is checked in
-  `tests/test_tokenizer.py` / `tests/test_data.py`. Keep `waveform_input` and fbank
-  params single-sourced from dataset metadata.
+  `tests/test_tokenizer.py` / `tests/test_data.py` (and per-segment in
+  `tests/test_segments.py`). **fbank stats are single-sourced from the run config**:
+  `openbeats-tokenize --config` records `encoder_conf.fbank_mean/std` in the dataset
+  metadata, and `pretraining/engine._check_dataset_compat` fails fast if the training
+  run config's stats (or codebook size) don't match the dataset.
+- Corpus recipes live in `recipes/<corpus>/` (**gitignored**): a `prepare_manifest.py`
+  adapter → `conf/{encoder_*.yaml, ds_*.json}` → `*.slurm` launchers. `recipes/watkins/`
+  is the reference (Kaldi `wav.scp`+`segments` → manifest → 4-GPU tokenize/train on
+  `ghx4`, account `bbjs-dtai-gh`). The package ships no run configs.
 - **Next milestone: acoustic tokenizer *training*** (out of scope for v1). The EMA-VQ
   / k-means code in `nets/tokenizer.py`/`nets/beats_utils.py` is dead at inference but
   kept verbatim for it; it will gain a `tokenization/engine.py` driven by the same
