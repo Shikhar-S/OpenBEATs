@@ -28,9 +28,33 @@ _RANDOM = (None, "random", "beats_random")
 DEFAULT_FBANK_MEAN = 15.41663
 DEFAULT_FBANK_STD = 6.55582
 
-def _batched(seq, n):
-    for i in range(0, len(seq), n):
-        yield seq[i : i + n]
+class _AudioItems:
+    """Dataset of manifest entries -> (entry, decoded waveform). Decoding and
+    resampling run in DataLoader workers so they overlap the GPU forward; the
+    tokenizer's encode is cheap and was otherwise starved by serial audio I/O."""
+
+    def __init__(self, items, target_sr=16000):
+        self.items = items
+        self.target_sr = target_sr
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, i):
+        from ..data.audio import load_audio
+
+        it = self.items[i]
+        try:
+            wav, _ = load_audio(
+                it["audio"], target_sr=self.target_sr,
+                start=it.get("start"), end=it.get("end"),
+            )
+        except Exception as e:  # noqa: BLE001 - skip unreadable files, keep going
+            return {"item": it, "wav": None, "err": str(e)}
+        return {"item": it, "wav": wav, "err": None}
+
+def _identity(batch):
+    return batch
 
 def dump(
     tokenizer_spec,
@@ -40,6 +64,7 @@ def dump(
     seed=45,
     device="cpu",
     batch_size=16,
+    num_workers=0,
     num_shards=1,
     shard_id=0,
     tokenizer_config=None,
@@ -50,7 +75,6 @@ def dump(
     import numpy as np
     import torch
 
-    from ..data.audio import load_audio
     from ..data.dataset import (
         CODES_OFFSET,
         TokenDatasetWriter,
@@ -90,18 +114,30 @@ def dump(
     )
     writer = TokenDatasetWriter(out_dir, meta, shard_id=shard_id)
 
+    loader = torch.utils.data.DataLoader(
+        _AudioItems(items),
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=_identity,
+        # Workers decode+resample audio (torch CPU ops); the tokenizer is already on
+        # CUDA in this process, so fork-after-CUDA would deadlock -> spawn fresh procs.
+        **(
+            {"multiprocessing_context": "spawn", "persistent_workers": True}
+            if num_workers > 0
+            else {}
+        ),
+    )
+
     n_done = 0
-    for batch in _batched(items, batch_size):
+    for batch in loader:
         wavs, ilens, keep = [], [], []
-        for it in batch:
-            try:
-                wav, sr = load_audio(it["audio"], start=it.get("start"), end=it.get("end"))
-            except Exception as e:  # noqa: BLE001 - skip unreadable files, keep going
-                logger.warning("skip %s (%s)", it["audio"], e)
+        for rec in batch:
+            if rec["wav"] is None:
+                logger.warning("skip %s (%s)", rec["item"]["audio"], rec["err"])
                 continue
-            wavs.append(torch.from_numpy(wav))
-            ilens.append(len(wav))
-            keep.append(it)
+            wavs.append(torch.from_numpy(rec["wav"]))
+            ilens.append(len(rec["wav"]))
+            keep.append(rec["item"])
         if not wavs:
             continue
 
@@ -168,6 +204,8 @@ def tokenize_main(argv=None):
     p.add_argument("--seed", type=int, default=45, help="random tokenizer seed")
     p.add_argument("--device", default="cpu")
     p.add_argument("--batch-size", type=int, default=16)
+    p.add_argument("--num-workers", type=int, default=8,
+                   help="audio-loading worker processes (0 = load in main process)")
     p.add_argument("--num-shards", type=int, default=1)
     p.add_argument("--shard-id", type=int, default=0)
     p.add_argument(
@@ -192,6 +230,7 @@ def tokenize_main(argv=None):
         seed=args.seed,
         device=args.device,
         batch_size=args.batch_size,
+        num_workers=args.num_workers,
         num_shards=args.num_shards,
         shard_id=args.shard_id,
         fbank_mean=fbank_mean,

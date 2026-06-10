@@ -2,9 +2,19 @@
 target rate. For segments only the requested span is read at native rate (cheap for
 long recordings) and then resampled — whole tapes are never loaded into memory."""
 
+from functools import lru_cache
+
 import numpy as np
 
 TARGET_SR = 16000
+
+@lru_cache(maxsize=8)
+def _resampler(orig_sr: int, target_sr: int):
+    # A transforms.Resample reuses its filter kernel across calls; functional.resample
+    # rebuilds it every time. Cached per process (one per worker under a DataLoader).
+    import torchaudio
+
+    return torchaudio.transforms.Resample(orig_sr, target_sr)
 
 def load_audio(path, target_sr: int = TARGET_SR, *, start=None, end=None):
     """Load path as a mono float32 waveform resampled to target_sr.
@@ -27,9 +37,8 @@ def load_audio(path, target_sr: int = TARGET_SR, *, start=None, end=None):
         wav = wav.mean(axis=1)
     if sr != target_sr:
         import torch
-        import torchaudio  # already required (kaldi fbank); avoids a librosa dep
 
-        wav = torchaudio.functional.resample(
-            torch.from_numpy(np.ascontiguousarray(wav)), sr, target_sr
+        wav = _resampler(sr, target_sr)(
+            torch.from_numpy(np.ascontiguousarray(wav))
         ).numpy()
     return np.ascontiguousarray(wav, dtype=np.float32), target_sr
