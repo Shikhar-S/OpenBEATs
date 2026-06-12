@@ -46,6 +46,17 @@ def to_device(batch: dict, device: str) -> dict:
         out[k] = v.to(device, non_blocking=True) if torch.is_tensor(v) else v
     return out
 
+def _scalarize(stats: dict) -> dict:
+    """The scalar entries of a stats dict as plain floats (objective-agnostic)."""
+    out = {}
+    for k, v in stats.items():
+        if torch.is_tensor(v):
+            if v.numel() == 1:
+                out[k] = float(v)
+        elif isinstance(v, (int, float)):
+            out[k] = float(v)
+    return out
+
 class _NoopMonitor:
     def write_events(self, events):  # events: list[(name, value, step)]
         pass
@@ -62,7 +73,8 @@ class PlainEngine:
         self.module = model.to(device)
         self.device = device
         self.optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
+            [p for p in model.parameters() if p.requires_grad],
+            lr=lr, weight_decay=weight_decay,
         )
         self.grad_clip = grad_clip
         self.global_steps = 0
@@ -261,15 +273,17 @@ def _train_one_epoch(
         step = engine.global_steps
         if step % log_interval == 0 and rank == 0:
             lr = engine.get_lr()[0] if hasattr(engine, "get_lr") else float("nan")
+            scalars = _scalarize(stats)
+            extra = " | ".join(f"{k} {v:.3f}" for k, v in scalars.items() if k != "loss")
             logger.info(
-                "epoch %d step %d | loss %.4f | acc_mask %.3f | lr %.2e",
-                epoch, step, float(stats["loss"]), float(stats.get("acc_mask", 0)), lr,
+                "epoch %d step %d | loss %.4f%s | lr %.2e",
+                epoch, step, scalars.get("loss", float("nan")),
+                f" | {extra}" if extra else "", lr,
             )
-            engine.monitor.write_events([
-                ("train/loss", float(stats["loss"]), step),
-                ("train/acc_mask", float(stats.get("acc_mask", 0)), step),
-                ("train/lr", lr, step),
-            ])
+            engine.monitor.write_events(
+                [(f"train/{k}", v, step) for k, v in scalars.items()]
+                + [("train/lr", lr, step)]
+            )
         if valid_loader is not None and valid_interval and step % valid_interval == 0:
             validate(engine, valid_loader, world_size, dist, device, step, rank)
             engine.train()
@@ -283,6 +297,13 @@ def _train_one_epoch(
 @torch.no_grad()
 def validate(engine, loader, world_size, dist, device, step, rank):
     engine.eval()
+    # Models may expose epoch-level metrics (e.g. classification acc/mAP) by buffering
+    # predictions during eval; reset, then gather + compute after the full pass.
+    module = getattr(engine, "module", None)
+    has_epoch = module is not None and hasattr(module, "compute_epoch_metrics")
+    if has_epoch:
+        module.reset_epoch_metrics()
+
     total_loss = torch.zeros(1, device=device)
     n = 0
     for batch in loader:
@@ -298,10 +319,35 @@ def validate(engine, loader, world_size, dist, device, step, rank):
         dist.all_reduce(cnt, ReduceOp.SUM)
         n = int(cnt.item())
     mean_loss = (total_loss / max(n, 1)).item()
+
+    metrics = {}
+    if has_epoch:
+        preds, targets = module.pop_epoch_buffers()
+        if dist is not None:
+            preds, targets = _gather_epoch(preds, targets, dist)
+        if rank == 0 and preds is not None:
+            metrics = module.compute_epoch_metrics(preds, targets)
+
     if rank == 0:
-        logger.info("[valid] step %d | loss %.4f", step, mean_loss)
-        engine.monitor.write_events([("valid/loss", mean_loss, step)])
+        extra = "".join(f" | {k} {v:.4f}" for k, v in metrics.items())
+        logger.info("[valid] step %d | loss %.4f%s", step, mean_loss, extra)
+        engine.monitor.write_events(
+            [("valid/loss", mean_loss, step)]
+            + [(f"valid/{k}", v, step) for k, v in metrics.items()]
+        )
     return mean_loss
+
+def _gather_epoch(preds, targets, dist):
+    """All-gather per-rank (preds, targets) CPU tensors into one pair on every rank."""
+    world = dist.get_world_size()
+    gp, gt = [None] * world, [None] * world
+    dist.all_gather_object(gp, preds)
+    dist.all_gather_object(gt, targets)
+    gp = [x for x in gp if x is not None]
+    gt = [x for x in gt if x is not None]
+    if not gp:
+        return None, None
+    return torch.cat(gp), torch.cat(gt)
 
 def _env_int(name, default):
     try:
@@ -391,7 +437,8 @@ def _train(engine_module, argv=None):
         tb.setdefault("job_name", run_name)
         engine, _, _, _ = deepspeed.initialize(
             model=model,
-            model_parameters=model.parameters(),
+            # only trainable params reach the optimizer/ZeRO (linear probing freezes the encoder)
+            model_parameters=[p for p in model.parameters() if p.requires_grad],
             config=ds_config,
         )
     else:
@@ -432,6 +479,16 @@ def _train(engine_module, argv=None):
 def train_encoder_main(argv=None):
     """openbeats-train-encoder: pretrain the BEATs encoder (masked acoustic modeling)."""
     from .pretraining import engine
+
+    _train(engine, argv)
+
+def finetune_main(argv=None):
+    """openbeats-finetune: fine-tune the encoder for classification (multi-class/-label).
+
+    --train_data / --valid_data are labeled JSONL manifests; the run config supplies
+    finetune_conf.init_ckpt (the pretrained checkpoint) and data_conf.label_list.
+    """
+    from .finetuning import engine
 
     _train(engine, argv)
 

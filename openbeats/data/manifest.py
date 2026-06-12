@@ -21,9 +21,12 @@ from typing import Iterator, Optional
 def _stem(path: str) -> str:
     return os.path.splitext(os.path.basename(path))[0]
 
-def normalize_entry(audio, start=None, end=None, id=None) -> dict:
+def normalize_entry(audio, start=None, end=None, id=None, label=None) -> dict:
     """Canonical manifest entry: abs audio path, float|None start/end,
-    str id (auto-derived from the stem + start offset when omitted)."""
+    str id (auto-derived from the stem + start offset when omitted).
+
+    label (optional) is a class name (multi-class) or list of names (multi-label);
+    it rides along for the classification data layer and is ignored by SSL."""
     audio = os.path.abspath(os.path.expanduser(str(audio)))
     start = None if start is None else float(start)
     end = None if end is None else float(end)
@@ -31,7 +34,10 @@ def normalize_entry(audio, start=None, end=None, id=None) -> dict:
         id = _stem(audio)
         if start is not None or end is not None:
             id = f"{id}_{int(round((start or 0.0) * 1000)):09d}"
-    return {"id": str(id), "audio": audio, "start": start, "end": end}
+    entry = {"id": str(id), "audio": audio, "start": start, "end": end}
+    if label is not None:
+        entry["label"] = label
+    return entry
 
 def _parse_line(line: str) -> Optional[dict]:
     line = line.strip()
@@ -39,7 +45,8 @@ def _parse_line(line: str) -> Optional[dict]:
         return None
     if line[0] == "{":
         obj = json.loads(line)
-        return normalize_entry(obj["audio"], obj.get("start"), obj.get("end"), obj.get("id"))
+        return normalize_entry(obj["audio"], obj.get("start"), obj.get("end"),
+                               obj.get("id"), obj.get("label"))
     return normalize_entry(line)
 
 def iter_manifest(path: str) -> Iterator[dict]:
@@ -62,5 +69,7 @@ def write_manifest(path: str, entries) -> str:
                 obj["start"] = e["start"]
             if e.get("end") is not None:
                 obj["end"] = e["end"]
+            if e.get("label") is not None:
+                obj["label"] = e["label"]
             f.write(json.dumps(obj) + "\n")
     return path

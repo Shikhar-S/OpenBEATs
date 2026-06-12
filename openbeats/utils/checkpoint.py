@@ -84,8 +84,9 @@ def load_checkpoint(checkpoint: str, base: Optional[str] = None) -> Checkpoint:
     obj = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     logger.info("Loaded %s", os.path.basename(ckpt_path))
 
-    if isinstance(obj, dict) and "cfg" in obj:  # self-contained SSL checkpoint
-        return Checkpoint(obj["cfg"], obj.get("model", obj), obj.get("token_list"))
+    if isinstance(obj, dict) and "cfg" in obj:  # self-contained SSL or fine-tune checkpoint
+        return Checkpoint(obj["cfg"], obj.get("model", obj), obj.get("token_list"),
+                          obj.get("multi_label", False))
 
     # Bare ESPnet .pth: architecture comes from the base SSL repo, labels from config.
     if not config_path:
