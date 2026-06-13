@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 
 from openbeats.data.labeled import (
+    MIN_SAMPLES,
     LabeledAudioDataset,
     cls_collate,
     read_label_list,
@@ -65,6 +66,20 @@ def test_labeled_dataset_multilabel_and_collate(tmp_path):
     assert batch["label_lengths"].tolist() == [2, 1]
     # speech padded to the longer clip
     assert int(batch["speech_lengths"].max()) == batch["speech"].shape[1]
+
+def test_short_clip_padded_to_minimum(tmp_path):
+    # clips shorter than one BEATs patch (<~3200 samples) must be padded, else the
+    # encoder emits zero patches -> NaN. Keep the clip, pad up to MIN_SAMPLES.
+    manifest = tmp_path / "train.jsonl"
+    wav = tmp_path / "tiny.wav"
+    _clip(wav, sec=0.05)  # 800 samples << MIN_SAMPLES
+    with open(manifest, "w") as f:
+        f.write(json.dumps({"id": "t", "audio": str(wav), "label": "a"}) + "\n")
+    labels = read_label_list(_labels_file(tmp_path, ["a", "b"]))
+    ds = LabeledAudioDataset(str(manifest), labels)
+    item = ds[0]
+    assert item["speech_lengths"] == MIN_SAMPLES
+    assert item["speech"].shape[0] == MIN_SAMPLES
 
 def test_multiclass_rejects_multiple_labels(tmp_path):
     manifest = tmp_path / "bad.jsonl"

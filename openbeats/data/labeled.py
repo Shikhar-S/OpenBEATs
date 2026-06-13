@@ -18,6 +18,10 @@ from .audio import load_audio
 from .loader import LengthBucketBatchSampler
 
 LABEL_PAD = -1
+# BEATs' 16x16 patch frontend needs >= ~3200 samples (0.2 s) to emit a single patch;
+# a shorter clip yields zero patches -> a fully-masked row -> NaN. Pad up to this so
+# every clip (incl. short calls in the eval sets) survives without being dropped.
+MIN_SAMPLES = 4000
 
 def read_label_list(path: str) -> list:
     """Read a labels.txt (one class name per line) into an ordered list."""
@@ -75,6 +79,8 @@ class LabeledAudioDataset(Dataset):
     def __getitem__(self, i: int) -> dict:
         it, ids = self.items[i]
         wav, _ = load_audio(it["audio"], start=it.get("start"), end=it.get("end"))
+        if wav.shape[0] < MIN_SAMPLES:
+            wav = np.pad(wav, (0, MIN_SAMPLES - wav.shape[0]))
         return {
             "id": it["id"],
             "speech": torch.from_numpy(np.ascontiguousarray(wav)),
