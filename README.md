@@ -64,12 +64,30 @@ print(out["patch_embeddings"].shape)               # (num_patches, 1024)
 The variants (Base and Large, plus AudioSet and bioacoustics fine-tunes) live in
 the [espnet OpenBEATs collection](https://huggingface.co/collections/espnet/openbeats).
 
-## Development
+## Citation
 
-```bash
-uv sync                                  # install with dev deps (pytest)
-uv run pytest                            # unit tests, no downloads
-OPENBEATS_INTEGRATION=1 uv run pytest    # also run the end-to-end tests
-uv build                                 # build wheel + sdist into dist/
-uv publish                               # publish to PyPI
+If you use OpenBEATs, please cite:
+
+```bibtex
+@INPROCEEDINGS{11230965,
+  author={Bharadwaj, Shikhar and Cornell, Samuele and Choi, Kwanghee and Fukayama, Satoru and Shim, Hye-Jin and Deshmukh, Soham and Watanabe, Shinji},
+  booktitle={2025 IEEE Workshop on Applications of Signal Processing to Audio and Acoustics (WASPAA)},
+  title={OpenBEATs: A Fully Open-Source General-Purpose Audio Encoder},
+  year={2025},
+  volume={},
+  number={},
+  pages={1-5},
+  keywords={Training;Representation learning;Codes;Conferences;Pipelines;Signal processing;Cognition;Robustness;Reproducibility of results;Question answering (information retrieval)},
+  doi={10.1109/WASPAA66052.2025.11230965}}
+```
+
+If you use the checkpoints trained for our ICME 2025 Audio Encoder Challenge submission, please also cite:
+
+```bibtex
+@article{bharadwaj2026cmu,
+  title={The CMU-AIST submission for the ICME 2025 Audio Encoder Challenge},
+  author={Bharadwaj, Shikhar and Cornell, Samuele and Choi, Kwanghee and Shim, Hye-jin and Deshmukh, Soham and Fukayama, Satoru and Watanabe, Shinji},
+  journal={arXiv preprint arXiv:2601.16273},
+  year={2026}
+}
 ```
