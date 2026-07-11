@@ -59,6 +59,18 @@ out = model.encode(wav, sr)
 print(out["patch_embeddings"].shape)               # (num_patches, 1024)
 ```
 
+### Batch inference
+
+Score a whole manifest at once — writes `predictions.parquet` (+ `predict.json`)
+under `--out`; needs the `tokenize` extra for pyarrow:
+
+```bash
+openbeats-batch-infer --checkpoint openbeats_cls.pt \
+    --manifest clips.jsonl --out preds/     # jsonl: {"id","audio"[,"start","end"]}
+```
+
+Pass `--embeddings` to also store the mean-pooled embedding per clip.
+
 ## Checkpoints
 
 The variants (Base and Large, plus AudioSet and bioacoustics fine-tunes) live in
@@ -96,6 +108,24 @@ openbeats-infer --checkpoint openbeats_large_pretrained.pt --audio audio.wav
 The masked-acoustic-modeling encoder/predictor and the acoustic tokenizer are
 vendored byte-for-byte from ESPnet (so pretrained encoders match the published
 ones); the dataset, DeepSpeed loop, and CLIs are a small fresh layer.
+
+## Fine-tuning (optional)
+
+Fine-tune an encoder for classification — multi-class or multi-label, full
+fine-tuning or a frozen-encoder linear probe — reusing the `train` extra and loop.
+
+```bash
+# A. fine-tune on a labeled manifest ({"id","audio","label"} + a labels.txt)
+openbeats-finetune \
+    --config conf/finetune.yaml \
+    --deepspeed_config conf/ds_finetune.json \
+    --train_data train.jsonl --valid_data valid.jsonl \
+    --output_dir exp/cls
+
+# B. export the best-on-valid checkpoint, then run it like any other
+openbeats-convert-cls --train_ckpt exp/cls/best --out openbeats_cls.pt
+openbeats-infer --checkpoint openbeats_cls.pt --audio audio.wav   # -> logits/probs + labels
+```
 
 ## Citation
 
