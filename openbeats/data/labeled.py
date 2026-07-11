@@ -28,6 +28,23 @@ def read_label_list(path: str) -> list:
     with open(path) as f:
         return [line.rstrip("\n") for line in f if line.strip()]
 
+def probe_length(it) -> int:
+    """Span length in samples after resampling to 16 kHz (for length bucketing)."""
+    import soundfile as sf
+
+    info = sf.info(it["audio"])
+    sr = info.samplerate
+    s = 0 if it.get("start") is None else int(round(it["start"] * sr))
+    e = info.frames if it.get("end") is None else int(round(it["end"] * sr))
+    return int(round(max(0, e - s) * 16000 / sr))
+
+def load_padded_span(it) -> np.ndarray:
+    """Load an entry's 16 kHz span, padding short clips up to MIN_SAMPLES."""
+    wav, _ = load_audio(it["audio"], start=it.get("start"), end=it.get("end"))
+    if wav.shape[0] < MIN_SAMPLES:
+        wav = np.pad(wav, (0, MIN_SAMPLES - wav.shape[0]))
+    return wav
+
 class LabeledAudioDataset(Dataset):
     """A labeled manifest as a torch Dataset of (speech, label ids) items.
 
@@ -54,7 +71,7 @@ class LabeledAudioDataset(Dataset):
                     f"multi-class entry {it['id']!r} must have exactly one label, got {ids}"
                 )
             self.items.append((it, ids))
-            self.n_samples.append(self._probe_length(it))
+            self.n_samples.append(probe_length(it))
         self.n_samples = np.asarray(self.n_samples, dtype=np.int64)
 
     def _encode_label(self, label) -> list:
@@ -64,23 +81,12 @@ class LabeledAudioDataset(Dataset):
         except KeyError as e:
             raise KeyError(f"label {e.args[0]!r} not in label_list") from None
 
-    def _probe_length(self, it) -> int:
-        import soundfile as sf
-
-        info = sf.info(it["audio"])
-        sr = info.samplerate
-        s = 0 if it.get("start") is None else int(round(it["start"] * sr))
-        e = info.frames if it.get("end") is None else int(round(it["end"] * sr))
-        return int(round(max(0, e - s) * 16000 / sr))  # samples after resample to 16 kHz
-
     def __len__(self) -> int:
         return len(self.items)
 
     def __getitem__(self, i: int) -> dict:
         it, ids = self.items[i]
-        wav, _ = load_audio(it["audio"], start=it.get("start"), end=it.get("end"))
-        if wav.shape[0] < MIN_SAMPLES:
-            wav = np.pad(wav, (0, MIN_SAMPLES - wav.shape[0]))
+        wav = load_padded_span(it)
         return {
             "id": it["id"],
             "speech": torch.from_numpy(np.ascontiguousarray(wav)),
@@ -144,6 +150,81 @@ def build_labeled_dataloader(
         collate_fn=cls_collate,
         num_workers=num_workers,
         # Same fork-after-CUDA rationale as the SSL loader: spawn fresh workers.
+        **(
+            {"multiprocessing_context": "spawn", "persistent_workers": True,
+             "pin_memory": False}
+            if num_workers > 0
+            else {}
+        ),
+    )
+    return dataset, loader, sampler
+
+class AudioManifestDataset(Dataset):
+    """A manifest as a torch Dataset of (id, speech) items for batched inference.
+
+    Same audio handling as LabeledAudioDataset (16 kHz span load, MIN_SAMPLES
+    short-clip pad) but labels are not required and are ignored; n_samples is
+    probed for length bucketing.
+    """
+
+    def __init__(self, manifest: str):
+        from .manifest import read_manifest
+
+        self.items = list(read_manifest(manifest))
+        self.n_samples = np.asarray([probe_length(it) for it in self.items], dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __getitem__(self, i: int) -> dict:
+        it = self.items[i]
+        wav = load_padded_span(it)
+        return {
+            "id": it["id"],
+            "speech": torch.from_numpy(np.ascontiguousarray(wav)),
+            "speech_lengths": int(wav.shape[0]),
+        }
+
+def infer_collate(batch: list) -> dict:
+    """Pad speech with 0.0; carry ids and lengths (no labels)."""
+    B = len(batch)
+    tmax = max(b["speech_lengths"] for b in batch)
+    speech = torch.zeros(B, tmax, dtype=torch.float32)
+    speech_lengths = torch.empty(B, dtype=torch.long)
+    ids = []
+    for j, b in enumerate(batch):
+        sl = b["speech_lengths"]
+        speech[j, :sl] = b["speech"]
+        speech_lengths[j] = sl
+        ids.append(b["id"])
+    return {"id": ids, "speech": speech, "speech_lengths": speech_lengths}
+
+def build_infer_dataloader(
+    manifest: str,
+    batch_bins: int,
+    *,
+    num_workers: int = 4,
+    max_batch_size: int | None = None,
+):
+    """Build (dataset, dataloader, sampler) for batched inference over a manifest.
+
+    Single-process: length-bucketed but unshuffled and not rank-sharded, so every
+    segment is emitted exactly once (rows carry their id; bucket order != manifest
+    order).
+    """
+    dataset = AudioManifestDataset(manifest)
+    sampler = LengthBucketBatchSampler(
+        dataset.n_samples,
+        batch_bins,
+        max_batch_size=max_batch_size,
+        shuffle=False,
+        world_size=1,
+    )
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_sampler=sampler,
+        collate_fn=infer_collate,
+        num_workers=num_workers,
         **(
             {"multiprocessing_context": "spawn", "persistent_workers": True,
              "pin_memory": False}

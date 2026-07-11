@@ -37,6 +37,7 @@ train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard", "tensorboard"]
 
 [project.scripts]
 openbeats-infer = "openbeats.inference.run_inference:infer_main"
+openbeats-batch-infer = "openbeats.inference.batch_infer:batch_infer_main"
 openbeats-download = "openbeats.utils.hub:download_main"
 openbeats-tokenize = "openbeats.tokenization.dump:tokenize_main"
 openbeats-tokens = "openbeats.utils.tokens:tokens_main"
