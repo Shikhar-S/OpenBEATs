@@ -133,6 +133,59 @@ class PlainEngine:
         self.global_steps = obj.get("global_steps", 0)
         return path, obj.get("client_state", {})
 
+class BestTracker:
+    """Keep the best-on-validation model in <save_dir>/best (+ best.json).
+
+    On improvement rank 0 writes just the weights, in the {"module": sd} shape convert
+    reads. It is not a global_step{N} dir, so pruning ignores it. best.json is reloaded
+    on construction so resume keeps the earlier best.
+    """
+
+    def __init__(self, save_dir, metric, mode="max"):
+        self.save_dir = save_dir
+        self.metric = metric
+        self.mode = mode
+        self.value = None
+        self.step = None
+        self._load()
+
+    def _best_json(self):
+        return os.path.join(self.save_dir, "best.json")
+
+    def _load(self):
+        path = self._best_json()
+        if not os.path.isfile(path):
+            return
+        with open(path) as f:
+            d = json.load(f)
+        if d.get("metric") == self.metric and d.get("mode") == self.mode:
+            self.value, self.step = d.get("value"), d.get("step")
+
+    def is_better(self, v) -> bool:
+        if v is None:
+            return False
+        if self.value is None:
+            return True
+        return v > self.value if self.mode == "max" else v < self.value
+
+    def update(self, engine, metrics, step) -> bool:
+        """If metrics[self.metric] beats the best, snapshot it; return whether it did."""
+        v = metrics.get(self.metric)
+        if not self.is_better(v):
+            return False
+        self.value, self.step = v, step
+        meta = {"metric": self.metric, "mode": self.mode, "value": v, "step": step}
+        best_dir = os.path.join(self.save_dir, "best")
+        os.makedirs(best_dir, exist_ok=True)
+        torch.save(
+            {"module": engine.module.state_dict(), "global_steps": step, "best": meta},
+            os.path.join(best_dir, MODEL_STATES),
+        )
+        with open(self._best_json(), "w") as f:
+            json.dump(meta, f, indent=2)
+        logger.info("[best] %s=%.4f at step %d -> %s", self.metric, v, step, best_dir)
+        return True
+
 def _maybe_dist():
     """Return (rank, world_size, dist_module_or_None)."""
     try:
@@ -213,6 +266,15 @@ def run(
     rank, world_size, dist = _maybe_dist()
     os.makedirs(save_dir, exist_ok=True)
 
+    # Opt-in by the model declaring selection_metric (classification does, pretraining
+    # doesn't); rank 0 only.
+    best_tracker = None
+    module = getattr(engine, "module", None)
+    metric = getattr(module, "selection_metric", None)
+    if rank == 0 and metric and valid_loader is not None:
+        best_tracker = BestTracker(save_dir, metric,
+                                   getattr(module, "selection_mode", "max"))
+
     start_epoch = 0
     if resume:
         _, client = engine.load_checkpoint(save_dir)
@@ -228,7 +290,7 @@ def run(
         _train_one_epoch(
             engine, train_loader, epoch, world_size, dist, device,
             max_steps, log_interval, save_dir, save_interval, keep_last_n,
-            keep_milestone_every, valid_loader, valid_interval, rank,
+            keep_milestone_every, valid_loader, valid_interval, rank, best_tracker,
         )
         if engine.global_steps >= max_steps:
             logger.info("reached max_steps=%d; stopping.", max_steps)
@@ -242,7 +304,7 @@ def run(
 def _train_one_epoch(
     engine, loader, epoch, world_size, dist, device, max_steps, log_interval,
     save_dir, save_interval, keep_last_n, keep_milestone_every, valid_loader,
-    valid_interval, rank,
+    valid_interval, rank, best_tracker=None,
 ):
     iterator_stop = torch.zeros(1, device=device) if dist is not None else None
 
@@ -285,7 +347,9 @@ def _train_one_epoch(
                 + [("train/lr", lr, step)]
             )
         if valid_loader is not None and valid_interval and step % valid_interval == 0:
-            validate(engine, valid_loader, world_size, dist, device, step, rank)
+            metrics = validate(engine, valid_loader, world_size, dist, device, step, rank)
+            if best_tracker is not None:
+                best_tracker.update(engine, metrics, step)
             engine.train()
         if save_interval and step % save_interval == 0:
             engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
@@ -335,7 +399,8 @@ def validate(engine, loader, world_size, dist, device, step, rank):
             [("valid/loss", mean_loss, step)]
             + [(f"valid/{k}", v, step) for k, v in metrics.items()]
         )
-    return mean_loss
+    # loss on all ranks; acc/mAP only on rank 0 (where best is chosen)
+    return {"loss": mean_loss, **metrics}
 
 def _gather_epoch(preds, targets, dist):
     """All-gather per-rank (preds, targets) CPU tensors into one pair on every rank."""

@@ -112,6 +112,7 @@ def load_beats_config(config_path: str) -> dict:
 def convert(train_ckpts: list, config_path: str, out_path: str) -> str:
     import torch
 
+    config_path = _resolve_config(config_path, train_ckpts)
     state_dict = average_state_dicts(train_ckpts)
     cfg = load_beats_config(config_path)
     logger.info("encoder keys: %d | exporting to %s", len(state_dict), out_path)
@@ -155,6 +156,7 @@ def convert_cls(train_ckpts: list, config_path: str, out_path: str) -> str:
     import torch
     import yaml
 
+    config_path = _resolve_config(config_path, train_ckpts)
     state_dict = average_state_dicts(train_ckpts, extract=extract_cls_state_dict)
     with open(config_path) as f:
         config = yaml.safe_load(f) or {}
@@ -195,7 +197,7 @@ def main(argv=None):
         datefmt="%H:%M:%S",
     )
 
-    convert(args.train_ckpt, _resolve_config(args.config, args.train_ckpt), args.out)
+    convert(args.train_ckpt, args.config, args.out)
 
 def cls_main(argv=None):
     p = argparse.ArgumentParser(prog="openbeats-convert-cls")
@@ -211,14 +213,20 @@ def cls_main(argv=None):
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
     )
-    convert_cls(args.train_ckpt, _resolve_config(args.config, args.train_ckpt), args.out)
+    convert_cls(args.train_ckpt, args.config, args.out)
 
 def _resolve_config(config_path, train_ckpt):
     if config_path is not None:
         return config_path
     first = train_ckpt[0]
     rundir = first if os.path.isdir(first) else os.path.dirname(os.path.dirname(first))
-    return os.path.join(rundir, "config.yaml")
+    cand = os.path.join(rundir, "config.yaml")
+    # best/ sits under the run dir; walk up for its config
+    if not os.path.isfile(cand):
+        parent = os.path.join(os.path.dirname(os.path.normpath(rundir)), "config.yaml")
+        if os.path.isfile(parent):
+            return parent
+    return cand
 
 if __name__ == "__main__":
     main()

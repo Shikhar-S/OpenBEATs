@@ -105,6 +105,9 @@ class BeatsClassificationModel(nn.Module):
         self.decoder = _PoolHead(encoder.output_size(), n_classes, pooling, head_dropout)
         self.n_classes = n_classes
         self.classification_type = classification_type
+        # best-checkpoint criterion (matches the compute_epoch_metrics key)
+        self.selection_metric = "acc" if classification_type == "multi-class" else "mAP"
+        self.selection_mode = "max"
         if classification_type == "multi-class":
             self.activation = partial(torch.softmax, dim=-1)
             self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)

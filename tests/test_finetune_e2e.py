@@ -86,8 +86,12 @@ def test_finetune_convert_infer(tmp_path):
     with open(exp / "config.yaml", "w") as f:
         yaml.safe_dump(config, f)
 
+    # best-on-valid snapshot was written and is exportable via <run>/best
+    assert (exp / "best" / "mp_rank_00_model_states.pt").is_file()
+    assert json.loads((exp / "best.json").read_text())["metric"] == "acc"
+
     out = tmp_path / "openbeats_cls.pt"
-    convert_cls([str(exp)], str(exp / "config.yaml"), str(out))
+    convert_cls([str(exp / "best")], None, str(out))  # config auto-resolved from parent
     assert out.is_file()
 
     # ---- inference: the fine-tuned checkpoint loads with head + labels ----
