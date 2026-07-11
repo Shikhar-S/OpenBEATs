@@ -46,6 +46,17 @@ def to_device(batch: dict, device: str) -> dict:
         out[k] = v.to(device, non_blocking=True) if torch.is_tensor(v) else v
     return out
 
+def _scalarize(stats: dict) -> dict:
+    """The scalar entries of a stats dict as plain floats (objective-agnostic)."""
+    out = {}
+    for k, v in stats.items():
+        if torch.is_tensor(v):
+            if v.numel() == 1:
+                out[k] = float(v)
+        elif isinstance(v, (int, float)):
+            out[k] = float(v)
+    return out
+
 class _NoopMonitor:
     def write_events(self, events):  # events: list[(name, value, step)]
         pass
@@ -62,7 +73,8 @@ class PlainEngine:
         self.module = model.to(device)
         self.device = device
         self.optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
+            [p for p in model.parameters() if p.requires_grad],
+            lr=lr, weight_decay=weight_decay,
         )
         self.grad_clip = grad_clip
         self.global_steps = 0
@@ -120,6 +132,59 @@ class PlainEngine:
             self.optimizer.load_state_dict(obj["optimizer"])
         self.global_steps = obj.get("global_steps", 0)
         return path, obj.get("client_state", {})
+
+class BestTracker:
+    """Keep the best-on-validation model in <save_dir>/best (+ best.json).
+
+    On improvement rank 0 writes just the weights, in the {"module": sd} shape convert
+    reads. It is not a global_step{N} dir, so pruning ignores it. best.json is reloaded
+    on construction so resume keeps the earlier best.
+    """
+
+    def __init__(self, save_dir, metric, mode="max"):
+        self.save_dir = save_dir
+        self.metric = metric
+        self.mode = mode
+        self.value = None
+        self.step = None
+        self._load()
+
+    def _best_json(self):
+        return os.path.join(self.save_dir, "best.json")
+
+    def _load(self):
+        path = self._best_json()
+        if not os.path.isfile(path):
+            return
+        with open(path) as f:
+            d = json.load(f)
+        if d.get("metric") == self.metric and d.get("mode") == self.mode:
+            self.value, self.step = d.get("value"), d.get("step")
+
+    def is_better(self, v) -> bool:
+        if v is None:
+            return False
+        if self.value is None:
+            return True
+        return v > self.value if self.mode == "max" else v < self.value
+
+    def update(self, engine, metrics, step) -> bool:
+        """If metrics[self.metric] beats the best, snapshot it; return whether it did."""
+        v = metrics.get(self.metric)
+        if not self.is_better(v):
+            return False
+        self.value, self.step = v, step
+        meta = {"metric": self.metric, "mode": self.mode, "value": v, "step": step}
+        best_dir = os.path.join(self.save_dir, "best")
+        os.makedirs(best_dir, exist_ok=True)
+        torch.save(
+            {"module": engine.module.state_dict(), "global_steps": step, "best": meta},
+            os.path.join(best_dir, MODEL_STATES),
+        )
+        with open(self._best_json(), "w") as f:
+            json.dump(meta, f, indent=2)
+        logger.info("[best] %s=%.4f at step %d -> %s", self.metric, v, step, best_dir)
+        return True
 
 def _maybe_dist():
     """Return (rank, world_size, dist_module_or_None)."""
@@ -201,6 +266,15 @@ def run(
     rank, world_size, dist = _maybe_dist()
     os.makedirs(save_dir, exist_ok=True)
 
+    # Opt-in by the model declaring selection_metric (classification does, pretraining
+    # doesn't); rank 0 only.
+    best_tracker = None
+    module = getattr(engine, "module", None)
+    metric = getattr(module, "selection_metric", None)
+    if rank == 0 and metric and valid_loader is not None:
+        best_tracker = BestTracker(save_dir, metric,
+                                   getattr(module, "selection_mode", "max"))
+
     start_epoch = 0
     if resume:
         _, client = engine.load_checkpoint(save_dir)
@@ -216,7 +290,7 @@ def run(
         _train_one_epoch(
             engine, train_loader, epoch, world_size, dist, device,
             max_steps, log_interval, save_dir, save_interval, keep_last_n,
-            keep_milestone_every, valid_loader, valid_interval, rank,
+            keep_milestone_every, valid_loader, valid_interval, rank, best_tracker,
         )
         if engine.global_steps >= max_steps:
             logger.info("reached max_steps=%d; stopping.", max_steps)
@@ -230,7 +304,7 @@ def run(
 def _train_one_epoch(
     engine, loader, epoch, world_size, dist, device, max_steps, log_interval,
     save_dir, save_interval, keep_last_n, keep_milestone_every, valid_loader,
-    valid_interval, rank,
+    valid_interval, rank, best_tracker=None,
 ):
     iterator_stop = torch.zeros(1, device=device) if dist is not None else None
 
@@ -261,17 +335,21 @@ def _train_one_epoch(
         step = engine.global_steps
         if step % log_interval == 0 and rank == 0:
             lr = engine.get_lr()[0] if hasattr(engine, "get_lr") else float("nan")
+            scalars = _scalarize(stats)
+            extra = " | ".join(f"{k} {v:.3f}" for k, v in scalars.items() if k != "loss")
             logger.info(
-                "epoch %d step %d | loss %.4f | acc_mask %.3f | lr %.2e",
-                epoch, step, float(stats["loss"]), float(stats.get("acc_mask", 0)), lr,
+                "epoch %d step %d | loss %.4f%s | lr %.2e",
+                epoch, step, scalars.get("loss", float("nan")),
+                f" | {extra}" if extra else "", lr,
             )
-            engine.monitor.write_events([
-                ("train/loss", float(stats["loss"]), step),
-                ("train/acc_mask", float(stats.get("acc_mask", 0)), step),
-                ("train/lr", lr, step),
-            ])
+            engine.monitor.write_events(
+                [(f"train/{k}", v, step) for k, v in scalars.items()]
+                + [("train/lr", lr, step)]
+            )
         if valid_loader is not None and valid_interval and step % valid_interval == 0:
-            validate(engine, valid_loader, world_size, dist, device, step, rank)
+            metrics = validate(engine, valid_loader, world_size, dist, device, step, rank)
+            if best_tracker is not None:
+                best_tracker.update(engine, metrics, step)
             engine.train()
         if save_interval and step % save_interval == 0:
             engine.save_checkpoint(save_dir, client_state={"epoch": epoch})
@@ -283,6 +361,13 @@ def _train_one_epoch(
 @torch.no_grad()
 def validate(engine, loader, world_size, dist, device, step, rank):
     engine.eval()
+    # Models may expose epoch-level metrics (e.g. classification acc/mAP) by buffering
+    # predictions during eval; reset, then gather + compute after the full pass.
+    module = getattr(engine, "module", None)
+    has_epoch = module is not None and hasattr(module, "compute_epoch_metrics")
+    if has_epoch:
+        module.reset_epoch_metrics()
+
     total_loss = torch.zeros(1, device=device)
     n = 0
     for batch in loader:
@@ -298,10 +383,36 @@ def validate(engine, loader, world_size, dist, device, step, rank):
         dist.all_reduce(cnt, ReduceOp.SUM)
         n = int(cnt.item())
     mean_loss = (total_loss / max(n, 1)).item()
+
+    metrics = {}
+    if has_epoch:
+        preds, targets = module.pop_epoch_buffers()
+        if dist is not None:
+            preds, targets = _gather_epoch(preds, targets, dist)
+        if rank == 0 and preds is not None:
+            metrics = module.compute_epoch_metrics(preds, targets)
+
     if rank == 0:
-        logger.info("[valid] step %d | loss %.4f", step, mean_loss)
-        engine.monitor.write_events([("valid/loss", mean_loss, step)])
-    return mean_loss
+        extra = "".join(f" | {k} {v:.4f}" for k, v in metrics.items())
+        logger.info("[valid] step %d | loss %.4f%s", step, mean_loss, extra)
+        engine.monitor.write_events(
+            [("valid/loss", mean_loss, step)]
+            + [(f"valid/{k}", v, step) for k, v in metrics.items()]
+        )
+    # loss on all ranks; acc/mAP only on rank 0 (where best is chosen)
+    return {"loss": mean_loss, **metrics}
+
+def _gather_epoch(preds, targets, dist):
+    """All-gather per-rank (preds, targets) CPU tensors into one pair on every rank."""
+    world = dist.get_world_size()
+    gp, gt = [None] * world, [None] * world
+    dist.all_gather_object(gp, preds)
+    dist.all_gather_object(gt, targets)
+    gp = [x for x in gp if x is not None]
+    gt = [x for x in gt if x is not None]
+    if not gp:
+        return None, None
+    return torch.cat(gp), torch.cat(gt)
 
 def _env_int(name, default):
     try:
@@ -323,6 +434,9 @@ def _train(engine_module, argv=None):
         help="use the plain torch fallback engine (CPU / no DeepSpeed)",
     )
     p.add_argument("--device", default=None, help="override device (default: auto)")
+    p.add_argument("--override", "-O", action="append", default=[], metavar="KEY=VAL",
+                   help="override a config field by dotted path, repeatable "
+                        "(e.g. -O data_conf.batch_bins=24000000)")
     args = p.parse_args(argv)
 
     logging.basicConfig(
@@ -335,6 +449,14 @@ def _train(engine_module, argv=None):
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
+
+    for item in args.override:  # -O a.b.c=val : yaml-typed leaf assignment
+        path, val = item.split("=", 1)
+        keys = path.split(".")
+        node = config
+        for k in keys[:-1]:
+            node = node.setdefault(k, {})
+        node[keys[-1]] = yaml.safe_load(val)
 
     local_rank = _env_int("LOCAL_RANK", 0)
     rank = _env_int("RANK", 0)
@@ -391,7 +513,8 @@ def _train(engine_module, argv=None):
         tb.setdefault("job_name", run_name)
         engine, _, _, _ = deepspeed.initialize(
             model=model,
-            model_parameters=model.parameters(),
+            # only trainable params reach the optimizer/ZeRO (linear probing freezes the encoder)
+            model_parameters=[p for p in model.parameters() if p.requires_grad],
             config=ds_config,
         )
     else:
@@ -432,6 +555,16 @@ def _train(engine_module, argv=None):
 def train_encoder_main(argv=None):
     """openbeats-train-encoder: pretrain the BEATs encoder (masked acoustic modeling)."""
     from .pretraining import engine
+
+    _train(engine, argv)
+
+def finetune_main(argv=None):
+    """openbeats-finetune: fine-tune the encoder for classification (multi-class/-label).
+
+    --train_data / --valid_data are labeled JSONL manifests; the run config supplies
+    finetune_conf.init_ckpt (the pretrained checkpoint) and data_conf.label_list.
+    """
+    from .finetuning import engine
 
     _train(engine, argv)
 

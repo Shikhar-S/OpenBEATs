@@ -37,11 +37,14 @@ train = ["deepspeed", "wandb", "pyarrow", "einops", "typeguard", "tensorboard"]
 
 [project.scripts]
 openbeats-infer = "openbeats.inference.run_inference:infer_main"
+openbeats-batch-infer = "openbeats.inference.batch_infer:batch_infer_main"
 openbeats-download = "openbeats.utils.hub:download_main"
 openbeats-tokenize = "openbeats.tokenization.dump:tokenize_main"
 openbeats-tokens = "openbeats.utils.tokens:tokens_main"
 openbeats-train-encoder = "openbeats.train:train_encoder_main"
+openbeats-finetune = "openbeats.train:finetune_main"
 openbeats-convert = "openbeats.utils.convert:main"
+openbeats-convert-cls = "openbeats.utils.convert:cls_main"
 
 [project.urls]
 Homepage = "https://shikhar-s.github.io/OpenBEATs/"

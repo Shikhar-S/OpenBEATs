@@ -66,6 +66,7 @@ def test_plain_engine_train_checkpoint_resume(tmp_path):
     assert latest.is_file()
     tag = latest.read_text().strip()
     assert (exp / tag / MODEL_STATES).is_file()
+    assert not (exp / "best").exists()  # pretraining declares no selection_metric
 
     # resume into a fresh engine: global_steps restored, training continues
     engine2 = PlainEngine(_model(), lr=1e-3, device="cpu")
@@ -122,6 +123,39 @@ def test_prune_checkpoints_keeps_last_n(tmp_path):
 
     _prune_checkpoints(str(tmp_path), keep_last=0)   # both knobs off -> no-op
     assert len([d for d in tmp_path.iterdir() if d.name.startswith("global_step")]) == 3
+
+
+class _DummyEngine:
+    def __init__(self):
+        import torch.nn as nn
+
+        self.module = nn.Linear(2, 2)
+
+
+def test_best_tracker_snapshots_and_resumes(tmp_path):
+    from openbeats.train import BestTracker, MODEL_STATES
+
+    eng = _DummyEngine()
+    t = BestTracker(str(tmp_path), "acc", "max")
+
+    assert t.update(eng, {"acc": 0.5}, step=10) is True    # first is always best
+    assert t.update(eng, {"acc": 0.4}, step=20) is False   # worse -> ignored
+    assert t.update(eng, {"acc": 0.7}, step=30) is True     # better -> new best
+    assert (t.value, t.step) == (0.7, 30)
+
+    best = tmp_path / "best" / MODEL_STATES
+    assert best.is_file()
+    meta = json.loads((tmp_path / "best.json").read_text())
+    assert meta == {"metric": "acc", "mode": "max", "value": 0.7, "step": 30}
+
+    # a fresh tracker re-seeds from disk (resume) and rejects a later worse pass
+    t2 = BestTracker(str(tmp_path), "acc", "max")
+    assert (t2.value, t2.step) == (0.7, 30)
+    assert t2.update(eng, {"acc": 0.6}, step=40) is False
+
+    # a different metric/mode does not adopt the stale best
+    t3 = BestTracker(str(tmp_path), "loss", "min")
+    assert t3.value is None
 
 
 def test_prune_checkpoints_keeps_milestones(tmp_path):
