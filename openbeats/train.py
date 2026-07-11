@@ -434,6 +434,9 @@ def _train(engine_module, argv=None):
         help="use the plain torch fallback engine (CPU / no DeepSpeed)",
     )
     p.add_argument("--device", default=None, help="override device (default: auto)")
+    p.add_argument("--override", "-O", action="append", default=[], metavar="KEY=VAL",
+                   help="override a config field by dotted path, repeatable "
+                        "(e.g. -O data_conf.batch_bins=24000000)")
     args = p.parse_args(argv)
 
     logging.basicConfig(
@@ -446,6 +449,14 @@ def _train(engine_module, argv=None):
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
+
+    for item in args.override:  # -O a.b.c=val : yaml-typed leaf assignment
+        path, val = item.split("=", 1)
+        keys = path.split(".")
+        node = config
+        for k in keys[:-1]:
+            node = node.setdefault(k, {})
+        node[keys[-1]] = yaml.safe_load(val)
 
     local_rank = _env_int("LOCAL_RANK", 0)
     rank = _env_int("RANK", 0)
